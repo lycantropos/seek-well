@@ -1,0 +1,12 @@
+version: '3'
+
+services:
+  seek-well:
+    build: .
+    image: lycantropos/seek-well:latest
+    volumes:
+      - .:/seek-well/
+    extra_hosts:
+      - "dockerhost:$DOCKERHOST"  # for debugging
+    command:
+      - run
