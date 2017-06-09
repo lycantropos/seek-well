@@ -9,10 +9,9 @@ from functools import partial
 from itertools import filterfalse
 from typing import (Callable,
                     Iterable,
-                    Iterator,
                     IO,
                     Dict,
-                    Tuple)
+                    Tuple, Union)
 
 import click
 import sqlparse
@@ -74,6 +73,7 @@ def run(path: str, output_file_name: str) -> None:
     path = os.path.abspath(path)
     paths = list(scripts_paths(path))
     scripts_by_paths = dict(parse_scripts(paths))
+
     if output_file_name:
         output_file_name += OUTPUT_FILE_EXTENSION
         with open(output_file_name, mode='w') as output_file:
@@ -102,6 +102,15 @@ def normalize(scripts_by_paths: Dict[str, SQLScript]
         yield script_path, script
 
 
+def scripts_paths(path: str) -> Iterable[str]:
+    for root, directories, files_names in os.walk(path):
+        for file_name in files_names:
+            _, extension = os.path.splitext(file_name)
+            if extension not in SQL_SCRIPTS_EXTENSIONS:
+                continue
+            yield os.path.join(root, file_name)
+
+
 def parse_scripts(paths: Iterable[str]
                   ) -> Iterable[Tuple[str, SQLScript]]:
     for script_path, raw_script_str in read_scripts(paths):
@@ -118,32 +127,21 @@ def read_scripts(paths: Iterable[str]) -> Iterable[Tuple[str, str]]:
         yield script_path, raw_script_str
 
 
-def script_used_identifiers(raw_script: str
-                            ) -> Iterable[Token]:
+def filtered_script_identifiers(
+        raw_script: str,
+        *,
+        filtered_statement_identifiers: Callable[[Token], Iterable[str]]
+) -> Iterable[Token]:
     statements = sqlparse.parsestream(raw_script)
     for statement in statements:
-        yield from token_used_identifiers(statement)
+        yield from filtered_statement_identifiers(statement)
 
 
-def script_defined_identifiers(raw_script: str
-                               ) -> Iterable[Token]:
-    statements = sqlparse.parsestream(raw_script)
-    for statement in statements:
-        yield from token_defined_identifiers(statement)
-
-
-def scripts_paths(path: str) -> Iterable[str]:
-    for root, directories, files_names in os.walk(path):
-        for file_name in files_names:
-            _, extension = os.path.splitext(file_name)
-            if extension not in SQL_SCRIPTS_EXTENSIONS:
-                continue
-            yield os.path.join(root, file_name)
-
-
-def is_used_identifier(token: Token) -> bool:
+def is_used_identifier(identifier: Union[Identifier,
+                                         IdentifierList]
+                       ) -> bool:
     try:
-        tokens = list(filtered_tokens(token.tokens))
+        tokens = list(filtered_tokens(identifier.tokens))
     except AttributeError:
         return False
     else:
@@ -151,13 +149,13 @@ def is_used_identifier(token: Token) -> bool:
             # look further
             return False
 
-    parent = token.parent
+    parent = identifier.parent
     if isinstance(parent, IdentifierList):
         return is_used_identifier(parent)
     siblings = list(filtered_tokens(parent.tokens))
     token_index = next(index
                        for index, sibling in enumerate(siblings)
-                       if sibling is token)
+                       if sibling is identifier)
     older_tokens = siblings[:token_index]
     try:
         nearest_older_token = older_tokens[-1]
@@ -168,15 +166,17 @@ def is_used_identifier(token: Token) -> bool:
     return USAGE_KEYWORDS_RE.match(nearest_older_token_str) is not None
 
 
-def is_defined_identifier(token: Token) -> bool:
-    parent_keyword_tokens = get_keyword_tokens(token.parent)
+def is_defined_identifier(identifier: Identifier) -> bool:
+    parent_keywords = (token
+                       for token in identifier.parent.tokens
+                       if token.is_keyword)
     try:
-        first_parent_token = next(parent_keyword_tokens)
+        first_parent_keyword = next(parent_keywords)
     except StopIteration:
         return False
-    first_parent_token_str = (first_parent_token
-                              .normalized.upper())
-    return DEFINITION_KEYWORDS_RE.match(first_parent_token_str) is not None
+    first_parent_keyword_str = (first_parent_keyword
+                                .normalized.upper())
+    return DEFINITION_KEYWORDS_RE.match(first_parent_keyword_str) is not None
 
 
 def filtered_token_identifiers(token: Token,
@@ -194,18 +194,25 @@ def filtered_token_identifiers(token: Token,
         yield from token_used_identifiers(token)
 
 
-def is_identifier(token: Token) -> bool:
-    return isinstance(token, Identifier)
-
-
 token_used_identifiers = partial(filtered_token_identifiers,
                                  identifiers_filter=is_used_identifier)
 token_defined_identifiers = partial(filtered_token_identifiers,
                                     identifiers_filter=is_defined_identifier)
 
+script_used_identifiers = partial(
+    filtered_script_identifiers,
+    filtered_statement_identifiers=token_used_identifiers)
+script_defined_identifiers = partial(
+    filtered_script_identifiers,
+    filtered_statement_identifiers=token_defined_identifiers)
+
 
 def filtered_tokens(tokens: Iterable[Token]) -> Iterable[Token]:
     return filterfalse(is_filler, tokens)
+
+
+def is_identifier(token: Token) -> bool:
+    return isinstance(token, Identifier)
 
 
 def is_filler(token: Token) -> bool:
@@ -218,16 +225,6 @@ def is_whitespace(token: Token) -> bool:
 
 def is_punctuation(token: Token) -> bool:
     return token.ttype is Punctuation
-
-
-def get_keyword_tokens(token: Token) -> Iterator[Token]:
-    try:
-        tokens = token.tokens
-    except AttributeError:
-        return
-    for token in tokens:
-        if token.is_keyword:
-            yield token
 
 
 if __name__ == '__main__':
