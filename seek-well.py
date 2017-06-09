@@ -2,10 +2,13 @@
 import json
 import logging
 import os
+import re
 from collections import (OrderedDict,
                          namedtuple)
+from functools import partial
 from itertools import filterfalse
-from typing import (Iterable,
+from typing import (Callable,
+                    Iterable,
                     Iterator,
                     IO,
                     Dict,
@@ -13,20 +16,38 @@ from typing import (Iterable,
 
 import click
 import sqlparse
+from sqlparse.keywords import KEYWORDS
 from sqlparse.sql import (Token,
-                          Identifier)
-from sqlparse.tokens import Punctuation
+                          Identifier,
+                          IdentifierList,
+                          Parenthesis)
+from sqlparse.tokens import (Punctuation,
+                             Keyword)
 
 __version__ = '0.0.0'
 
 logger = logging.getLogger(__name__)
 
+# adding PostgreSQL specific keywords
+KEYWORDS.update({'MATERIALIZED': Keyword,
+                 'WINDOW': Keyword})
+
 SQL_SCRIPTS_EXTENSIONS = {'.sql'}
 OUTPUT_FILE_EXTENSION = '.json'
 
-EXTENDED_KEYWORDS = {'MATERIALIZED'}
-DEFINITION_KEYWORDS = {'CREATE', 'CREATE OR REPLACE'}
-USAGE_KEYWORDS = {'FROM', 'JOIN'}
+DEFINITION_KEYWORDS_RE = re.compile(r'^CREATE(\s+OR\s+REPLACE)?$')
+USAGE_KEYWORDS_RE = re.compile(
+    r'^('
+    r'((CROSS\s+)'
+    r'|'
+    r'((NATURAL\s+)?'
+    r'((INNER\s+)?'
+    r'|'
+    r'((LEFT\s+|RIGHT\s+|FULL\s+)(OUTER\s+)?))))?'
+    r'JOIN'
+    r'|'
+    r'FROM'
+    r')$')
 
 SQLScript = namedtuple('SQLScript', ['used', 'defined'])
 
@@ -72,66 +93,43 @@ def export(*,
 def normalize(scripts_by_paths: Dict[str, SQLScript]
               ) -> Iterable[Tuple[str, OrderedDict]]:
     for script_path, script in scripts_by_paths.items():
-        script = OrderedDict(defined=[token.normalized
-                                      for token in script.defined],
-                             used=[token.normalized
-                                   for token in script.used])
+        defined_identifiers = list(script.defined)
+        defined_identifiers.sort()
+        used_identifiers = list(script.used)
+        used_identifiers.sort()
+        script = OrderedDict(defined=defined_identifiers,
+                             used=used_identifiers)
         yield script_path, script
 
 
 def parse_scripts(paths: Iterable[str]
                   ) -> Iterable[Tuple[str, SQLScript]]:
     for script_path, raw_script_str in read_scripts(paths):
-        script = SQLScript(defined=list(script_defined_identifiers(raw_script_str)),
-                           used=list(script_used_identifiers(raw_script_str)))
+        script = SQLScript(
+            defined=set(script_defined_identifiers(raw_script_str)),
+            used=set(script_used_identifiers(raw_script_str)))
         yield script_path, script
 
 
-def read_scripts(scripts_paths):
-    for script_path in scripts_paths:
+def read_scripts(paths: Iterable[str]) -> Iterable[Tuple[str, str]]:
+    for script_path in paths:
         with open(script_path) as raw_script:
             raw_script_str = raw_script.read()
         yield script_path, raw_script_str
 
 
-def script_used_identifiers(raw_script: Iterable[str]
+def script_used_identifiers(raw_script: str
                             ) -> Iterable[Token]:
     statements = sqlparse.parsestream(raw_script)
     for statement in statements:
         yield from token_used_identifiers(statement)
 
 
-def script_defined_identifiers(raw_script: Iterable[str]
+def script_defined_identifiers(raw_script: str
                                ) -> Iterable[Token]:
     statements = sqlparse.parsestream(raw_script)
     for statement in statements:
         yield from token_defined_identifiers(statement)
-
-
-def token_used_identifiers(token: Token) -> Iterable[Token]:
-    try:
-        tokens = filtered_tokens(token)
-    except AttributeError:
-        return
-    for token in tokens:
-        if is_identifier(token) and is_used_identifier(token):
-            yield token
-            continue
-        yield from token_used_identifiers(token)
-
-
-def token_defined_identifiers(token: Token
-                              ) -> Iterable[Token]:
-    try:
-        tokens = filtered_tokens(token)
-    except AttributeError:
-        return
-    for token in tokens:
-        if is_identifier(token):
-            if is_defined_identifier(token):
-                yield token
-        else:
-            yield from token_defined_identifiers(token)
 
 
 def scripts_paths(path: str) -> Iterable[str]:
@@ -143,24 +141,20 @@ def scripts_paths(path: str) -> Iterable[str]:
             yield os.path.join(root, file_name)
 
 
-def is_identifier(token: Token) -> bool:
-    return (isinstance(token, Identifier) and
-            token.normalized.upper() not in EXTENDED_KEYWORDS)
-
-
 def is_used_identifier(token: Token) -> bool:
     try:
-        tokens = token.tokens
-        if len(tokens) > 1:
-            return False
+        tokens = list(filtered_tokens(token.tokens))
     except AttributeError:
         return False
+    else:
+        if isinstance(tokens[0], Parenthesis):
+            # look further
+            return False
 
     parent = token.parent
-    try:
-        siblings = list(filtered_tokens(parent))
-    except AttributeError:
-        return False
+    if isinstance(parent, IdentifierList):
+        return is_used_identifier(parent)
+    siblings = list(filtered_tokens(parent.tokens))
     token_index = next(index
                        for index, sibling in enumerate(siblings)
                        if sibling is token)
@@ -171,7 +165,7 @@ def is_used_identifier(token: Token) -> bool:
         return False
     nearest_older_token_str = (nearest_older_token
                                .normalized.upper())
-    return nearest_older_token_str in USAGE_KEYWORDS
+    return USAGE_KEYWORDS_RE.match(nearest_older_token_str) is not None
 
 
 def is_defined_identifier(token: Token) -> bool:
@@ -182,11 +176,36 @@ def is_defined_identifier(token: Token) -> bool:
         return False
     first_parent_token_str = (first_parent_token
                               .normalized.upper())
-    return first_parent_token_str in DEFINITION_KEYWORDS
+    return DEFINITION_KEYWORDS_RE.match(first_parent_token_str) is not None
 
 
-def filtered_tokens(token: Token) -> Iterable[Token]:
-    return filterfalse(is_filler, token.tokens)
+def filtered_token_identifiers(token: Token,
+                               *,
+                               identifiers_filter: Callable[[Token], bool]
+                               ) -> Iterable[str]:
+    try:
+        tokens = filtered_tokens(token.tokens)
+    except AttributeError:
+        return
+    for token in tokens:
+        if is_identifier(token) and identifiers_filter(token):
+            yield token.normalized
+            continue
+        yield from token_used_identifiers(token)
+
+
+def is_identifier(token: Token) -> bool:
+    return isinstance(token, Identifier)
+
+
+token_used_identifiers = partial(filtered_token_identifiers,
+                                 identifiers_filter=is_used_identifier)
+token_defined_identifiers = partial(filtered_token_identifiers,
+                                    identifiers_filter=is_defined_identifier)
+
+
+def filtered_tokens(tokens: Iterable[Token]) -> Iterable[Token]:
+    return filterfalse(is_filler, tokens)
 
 
 def is_filler(token: Token) -> bool:
