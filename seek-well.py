@@ -2,10 +2,14 @@
 import json
 import logging
 import os
-from collections import OrderedDict, namedtuple
+from collections import (OrderedDict,
+                         namedtuple)
 from itertools import filterfalse
 from typing import (Iterable,
-                    Iterator, Tuple, Dict, IO)
+                    Iterator,
+                    IO,
+                    Dict,
+                    Tuple)
 
 import click
 import sqlparse
@@ -18,12 +22,13 @@ __version__ = '0.0.0'
 logger = logging.getLogger(__name__)
 
 SQL_SCRIPTS_EXTENSIONS = {'.sql'}
+OUTPUT_FILE_EXTENSION = '.json'
+
 EXTENDED_KEYWORDS = {'MATERIALIZED'}
 DEFINITION_KEYWORDS = {'CREATE', 'CREATE OR REPLACE'}
 USAGE_KEYWORDS = {'FROM', 'JOIN'}
 
 SQLScript = namedtuple('SQLScript', ['used', 'defined'])
-OUTPUT_FILE_EXTENSION = '.json'
 
 
 @click.group()
