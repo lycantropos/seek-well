@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import copy
 import json
 import logging
 import os
@@ -11,7 +12,7 @@ from typing import (Callable,
                     Iterable,
                     IO,
                     Dict,
-                    Tuple, Union)
+                    Tuple, Union, Optional)
 
 import click
 import sqlparse
@@ -73,12 +74,66 @@ def run(path: str, output_file_name: str) -> None:
     path = os.path.abspath(path)
     paths = list(scripts_paths(path))
     scripts_by_paths = dict(parse_scripts(paths))
-
+    update_chained_scripts(scripts_by_paths)
     if output_file_name:
         output_file_name += OUTPUT_FILE_EXTENSION
         with open(output_file_name, mode='w') as output_file:
             export(scripts_by_paths=scripts_by_paths,
                    stream=output_file)
+
+
+def update_chained_scripts(
+        scripts_by_paths: Dict[str, SQLScript]) -> None:
+    scripts_by_paths_copy = copy.deepcopy(
+        scripts_by_paths)
+
+    def path_by_identifier(identifier: str) -> Optional[str]:
+        paths = [
+            path
+            for path, script in scripts_by_paths_copy.items()
+            if identifier in script.defined]
+        try:
+            path, = paths
+        except ValueError as err:
+            if paths:
+                paths_str = ', '.join(paths)
+                err_msg = ('Requested module name is ambiguous: '
+                           'found {appearances_count} appearances '
+                           'of identifier "{identifier}" '
+                           'in scripts definitions within '
+                           'files located at {paths}.'
+                           .format(appearances_count=len(paths),
+                                   identifier=identifier,
+                                   paths=paths_str))
+                raise ValueError(err_msg) from err
+            warn_msg = ('Requested identifier is not found: '
+                        'no appearance '
+                        'of identifier "{identifier}" '
+                        'in scripts definitions.'
+                        .format(identifier=identifier))
+            logger.warning(warn_msg)
+            return None
+        return path
+
+    for path, script in scripts_by_paths_copy.items():
+        unprocessed_identifiers = copy.deepcopy(script.used)
+        try:
+            while True:
+                identifier = unprocessed_identifiers.pop()
+                try:
+                    extension = scripts_by_paths[
+                        path_by_identifier(identifier)
+                    ]
+                except KeyError:
+                    continue
+                unprocessed_identifiers |= extension.used
+                used = (
+                    script.used
+                    | extension.used
+                    | extension.defined)
+                scripts_by_paths[path] = script._replace(used=used)
+        except KeyError:
+            continue
 
 
 def export(*,
