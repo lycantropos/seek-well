@@ -13,5 +13,6 @@ setup(name='seek-well',
                    'master.tar.gz',
       keywords=['sql'],
       install_requires=[
+          'sqlparse>=0.2.3',  # parsing SQL statements
           'click>=6.7',  # parsing command-line arguments
       ])

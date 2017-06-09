@@ -10,3 +10,7 @@ services:
       - "dockerhost:$DOCKERHOST"  # for debugging
     command:
       - run
+      - -p
+      - test_scripts
+      - -o
+      - hierarchy
