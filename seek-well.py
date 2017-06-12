@@ -26,7 +26,7 @@ from sqlparse.sql import (Token,
 from sqlparse.tokens import (Punctuation,
                              Keyword)
 
-__version__ = '0.0.0'
+__version__ = '0.0.1'
 
 logger = logging.getLogger(__name__)
 
