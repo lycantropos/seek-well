@@ -8,11 +8,13 @@ from collections import (OrderedDict,
                          namedtuple)
 from functools import partial
 from itertools import filterfalse
-from typing import (Callable,
+from typing import (Union,
+                    Optional,
+                    Callable,
                     Iterable,
                     IO,
                     Dict,
-                    Tuple, Union, Optional)
+                    Tuple, Set)
 
 import click
 import sqlparse
@@ -74,6 +76,7 @@ def run(path: str, output_file_name: str) -> None:
     path = os.path.abspath(path)
     paths = list(scripts_paths(path))
     scripts_by_paths = dict(parse_scripts(paths))
+    check_scripts_circular_dependencies(scripts_by_paths)
     update_chained_scripts(scripts_by_paths)
     if output_file_name:
         output_file_name += OUTPUT_FILE_EXTENSION
@@ -82,51 +85,67 @@ def run(path: str, output_file_name: str) -> None:
                    stream=output_file)
 
 
-def update_chained_scripts(
-        scripts_by_paths: Dict[str, SQLScript]) -> None:
+def check_scripts_circular_dependencies(scripts_by_paths: Dict[str, SQLScript]
+                                        ) -> None:
+    for script in scripts_by_paths.values():
+        check_script_circular_dependencies(script=script,
+                                           defined_identifiers=set(),
+                                           scripts_by_paths=scripts_by_paths)
+
+
+def check_script_circular_dependencies(*,
+                                       script: SQLScript,
+                                       defined_identifiers: Set[str],
+                                       scripts_by_paths: Dict[str, SQLScript]
+                                       ) -> None:
+    defined_identifiers = defined_identifiers | script.defined
+    for identifier in script.used:
+        dependency_path = identifier_path(identifier,
+                                          scripts_by_paths=scripts_by_paths)
+        try:
+            dependency = scripts_by_paths[dependency_path]
+        except KeyError:
+            continue
+        try:
+            cyclic_identifier = next(identifier
+                                     for identifier in dependency.used
+                                     if identifier in defined_identifiers)
+            cyclic_identifier_path = identifier_path(cyclic_identifier,
+                                                     scripts_by_paths=scripts_by_paths)
+            err_msg = ('Cyclic usage found: '
+                       f'identifier "{cyclic_identifier}" '
+                       'is defined in script '
+                       f'"{cyclic_identifier_path}" '
+                       'which is one of '
+                       f'located at "{dependency_path}" '
+                       'script users.')
+            raise RecursionError(err_msg)
+        except StopIteration:
+            check_script_circular_dependencies(script=dependency,
+                                               defined_identifiers=defined_identifiers,
+                                               scripts_by_paths=scripts_by_paths)
+
+
+def update_chained_scripts(scripts_by_paths: Dict[str, SQLScript]
+                           ) -> None:
     scripts_by_paths_copy = copy.deepcopy(
         scripts_by_paths)
 
-    def path_by_identifier(identifier: str) -> Optional[str]:
-        paths = [
-            path
-            for path, script in scripts_by_paths_copy.items()
-            if identifier in script.defined]
-        try:
-            path, = paths
-        except ValueError as err:
-            if paths:
-                paths_str = ', '.join(paths)
-                err_msg = ('Requested module name is ambiguous: '
-                           'found {appearances_count} appearances '
-                           'of identifier "{identifier}" '
-                           'in scripts definitions within '
-                           'files located at {paths}.'
-                           .format(appearances_count=len(paths),
-                                   identifier=identifier,
-                                   paths=paths_str))
-                raise ValueError(err_msg) from err
-            warn_msg = ('Requested identifier is not found: '
-                        'no appearance '
-                        'of identifier "{identifier}" '
-                        'in scripts definitions.'
-                        .format(identifier=identifier))
-            logger.warning(warn_msg)
-            return None
-        return path
-
-    for path, script in scripts_by_paths_copy.items():
-        unprocessed_identifiers = copy.deepcopy(script.used)
+    for path, script_copy in scripts_by_paths_copy.items():
+        unprocessed_identifiers = copy.deepcopy(script_copy.used)
         try:
             while True:
                 identifier = unprocessed_identifiers.pop()
+                extension_path = identifier_path(identifier,
+                                                 scripts_by_paths=scripts_by_paths_copy)
                 try:
-                    extension = scripts_by_paths[
-                        path_by_identifier(identifier)
-                    ]
+                    extension = scripts_by_paths[extension_path]
                 except KeyError:
                     continue
+
                 unprocessed_identifiers |= extension.used
+
+                script = scripts_by_paths[path]
                 used = (
                     script.used
                     | extension.used
@@ -134,6 +153,33 @@ def update_chained_scripts(
                 scripts_by_paths[path] = script._replace(used=used)
         except KeyError:
             continue
+
+
+def identifier_path(identifier: str,
+                    *,
+                    scripts_by_paths: Dict[str, SQLScript]
+                    ) -> Optional[str]:
+    paths = [path
+             for path, script in scripts_by_paths.items()
+             if identifier in script.defined]
+    try:
+        path, = paths
+        return path
+    except ValueError as err:
+        if paths:
+            paths_str = ', '.join(paths)
+            err_msg = ('Requested module name is ambiguous: '
+                       f'found {len(paths)} appearances '
+                       f'of identifier "{identifier}" '
+                       'in scripts definitions within '
+                       f'files located at {paths_str}.')
+            raise ValueError(err_msg) from err
+        warn_msg = ('Requested identifier is not found: '
+                    'no appearance '
+                    f'of identifier "{identifier}" '
+                    'in scripts definitions.')
+        logger.warning(warn_msg)
+        return None
 
 
 def export(*,
