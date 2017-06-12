@@ -14,7 +14,7 @@ from typing import (Union,
                     Iterable,
                     IO,
                     Dict,
-                    Tuple, Set)
+                    Tuple, Set, List)
 
 import click
 import sqlparse
@@ -71,18 +71,48 @@ def main() -> None:
                    '(".json" extension will be added).')
 def run(path: str, output_file_name: str) -> None:
     """
-    Orders modules paths by inclusion.
+    Orders scripts paths by inclusion.
     """
     path = os.path.abspath(path)
     paths = list(scripts_paths(path))
     scripts_by_paths = dict(parse_scripts(paths))
     check_scripts_circular_dependencies(scripts_by_paths)
     update_chained_scripts(scripts_by_paths)
+    sorted_scripts_by_paths = OrderedDict(sort_scripts(scripts_by_paths.items()))
     if output_file_name:
         output_file_name += OUTPUT_FILE_EXTENSION
         with open(output_file_name, mode='w') as output_file:
-            export(scripts_by_paths=scripts_by_paths,
+            export(scripts_by_paths=sorted_scripts_by_paths,
                    stream=output_file)
+
+
+def sort_scripts(scripts_by_paths: Iterable[Tuple[str, SQLScript]]
+                 ) -> List[Tuple[str, SQLScript]]:
+    res = list()
+    for path, script in scripts_by_paths:
+        index_by_defined = min(
+            (index
+             for index, (_, other_script) in enumerate(
+                res,
+                # insertion should be before script
+                # in which one of current script's defined identifiers is used
+                start=0)
+             if any(defined_identifier in other_script.used
+                    for defined_identifier in script.defined)),
+            default=0)
+        index_by_used = max(
+            (index
+             for index, (_, other_script) in enumerate(
+                res,
+                # insertion should be after script
+                # in which one of current script's used identifiers is defined
+                start=1)
+             if any(used_identifier in other_script.defined
+                    for used_identifier in script.used)),
+            default=0)
+        index = max(index_by_defined, index_by_used)
+        res.insert(index, (path, script))
+    return res
 
 
 def check_scripts_circular_dependencies(scripts_by_paths: Dict[str, SQLScript]
@@ -231,11 +261,11 @@ def read_scripts(paths: Iterable[str]) -> Iterable[Tuple[str, str]]:
 def filtered_script_identifiers(
         raw_script: str,
         *,
-        filtered_statement_identifiers: Callable[[Token], Iterable[str]]
+        statement_identifiers_filter: Callable[[Token], Iterable[str]]
 ) -> Iterable[Token]:
     statements = sqlparse.parsestream(raw_script)
     for statement in statements:
-        yield from filtered_statement_identifiers(statement)
+        yield from statement_identifiers_filter(statement)
 
 
 def is_used_identifier(identifier: Union[Identifier,
