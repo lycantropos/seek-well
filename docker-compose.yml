@@ -14,3 +14,7 @@ services:
       - test_scripts
       - -o
       - hierarchy
+      - -l
+      - fdp
+      - -g
+      - hierarchy

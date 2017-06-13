@@ -14,5 +14,6 @@ setup(name='seek-well',
       keywords=['sql'],
       install_requires=[
           'sqlparse>=0.2.3',  # parsing SQL statements
+          'graphviz>=0.7.1',
           'click>=6.7',  # parsing command-line arguments
       ])
