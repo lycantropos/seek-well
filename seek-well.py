@@ -7,24 +7,30 @@ import re
 from collections import (OrderedDict,
                          namedtuple)
 from functools import partial
-from itertools import filterfalse, takewhile
+from itertools import (filterfalse,
+                       takewhile)
 from typing import (Union,
                     Optional,
                     Callable,
                     Iterable,
                     Dict,
-                    Tuple, Set, List)
+                    Tuple,
+                    Set,
+                    List)
 
 import click
 import sqlparse
-from graphviz import Digraph, FORMATS, ENGINES
-from sqlparse.keywords import SQL_REGEX, FLAGS
+from graphviz import (ENGINES,
+                      FORMATS,
+                      Digraph)
+from sqlparse.keywords import (SQL_REGEX,
+                               FLAGS)
 from sqlparse.sql import (Token,
                           Identifier,
                           IdentifierList,
                           Parenthesis)
-from sqlparse.tokens import (Punctuation,
-                             Keyword)
+from sqlparse.tokens import (Keyword,
+                             Punctuation)
 
 __version__ = '0.0.1'
 
@@ -355,20 +361,18 @@ def is_used_identifier(token: Union[Identifier,
     parent = token.parent
     if isinstance(parent, IdentifierList):
         return is_used_identifier(parent)
-    older_tokens = list(get_older_tokens(token))
+    older_siblings = list(token_older_siblings(token))
     try:
-        nearest_older_token = older_tokens[-1]
+        nearest_older_sibling = older_siblings[-1]
     except IndexError:
         return False
-    nearest_older_token_str = (nearest_older_token
-                               .normalized.upper())
-    return USAGE_KEYWORDS_RE.match(nearest_older_token_str) is not None
+    nearest_older_sibling_str = (nearest_older_sibling
+                                 .normalized.upper())
+    return USAGE_KEYWORDS_RE.match(nearest_older_sibling_str) is not None
 
 
 def is_defined_identifier(identifier: Identifier) -> bool:
-    parent_keywords = (token
-                       for token in identifier.parent.tokens
-                       if token.is_keyword)
+    parent_keywords = filter(is_keyword, identifier.parent.tokens)
     try:
         first_parent_keyword = next(parent_keywords)
     except StopIteration:
@@ -397,8 +401,8 @@ def token_defined_identifiers(token: Token) -> Iterable[str]:
         return
     for token in tokens:
         if is_identifier(token) and is_defined_identifier(token):
-            older_tokens = get_older_tokens(token)
-            older_keywords = list(filter(is_keyword, older_tokens))
+            older_siblings = token_older_siblings(token)
+            older_keywords = list(filter(is_keyword, older_siblings))
             identifier_type = older_keywords[1].normalized
             yield SQLIdentifier(type=identifier_type,
                                 name=token.normalized)
@@ -406,7 +410,7 @@ def token_defined_identifiers(token: Token) -> Iterable[str]:
         yield from token_defined_identifiers(token)
 
 
-def get_older_tokens(token: Token) -> Iterable[Token]:
+def token_older_siblings(token: Token) -> Iterable[Token]:
     def older(sibling: Token) -> bool:
         # we assume that siblings are ordered
         return sibling is not token
@@ -436,15 +440,7 @@ def is_keyword(token: Token) -> bool:
 
 
 def is_filler(token: Token) -> bool:
-    return is_whitespace(token) or is_punctuation(token)
-
-
-def is_whitespace(token: Token) -> bool:
-    return token.is_whitespace
-
-
-def is_punctuation(token: Token) -> bool:
-    return token.ttype is Punctuation
+    return token.is_whitespace or token.ttype is Punctuation
 
 
 if __name__ == '__main__':
