@@ -7,7 +7,7 @@ import re
 from collections import (OrderedDict,
                          namedtuple)
 from functools import partial
-from itertools import filterfalse
+from itertools import filterfalse, takewhile
 from typing import (Union,
                     Optional,
                     Callable,
@@ -18,7 +18,7 @@ from typing import (Union,
 import click
 import sqlparse
 from graphviz import Digraph, FORMATS, ENGINES
-from sqlparse.keywords import KEYWORDS
+from sqlparse.keywords import SQL_REGEX, FLAGS
 from sqlparse.sql import (Token,
                           Identifier,
                           IdentifierList,
@@ -31,8 +31,7 @@ __version__ = '0.0.1'
 logger = logging.getLogger(__name__)
 
 # adding PostgreSQL specific keywords
-KEYWORDS.update({'MATERIALIZED': Keyword,
-                 'WINDOW': Keyword})
+SQL_REGEX.insert(0, (re.compile(r'MATERIALIZED\s+VIEW', FLAGS).match, Keyword))
 
 SQL_SCRIPTS_EXTENSIONS = {'.sql'}
 OUTPUT_FILE_EXTENSION = '.json'
@@ -53,6 +52,7 @@ USAGE_KEYWORDS_RE = re.compile(
     r')$')
 
 SQLScript = namedtuple('SQLScript', ['used', 'defined'])
+SQLIdentifier = namedtuple('SQLIdentifier', ['type', 'name'])
 
 
 @click.group()
@@ -92,15 +92,19 @@ def run(path: str,
     path = os.path.abspath(path)
     paths = list(scripts_paths(path))
     scripts_by_paths = dict(parse_scripts(paths))
-    check_scripts_circular_dependencies(scripts_by_paths)
-    update_chained_scripts(scripts_by_paths)
-    sorted_scripts_by_paths = OrderedDict(
-        sort_scripts(scripts_by_paths.items()))
+    defined_names_by_paths = {path: script_defined_names(script)
+                              for path, script in scripts_by_paths.items()}
+    check_scripts_circular_dependencies(scripts_by_paths=scripts_by_paths,
+                                        defined_names_by_paths=defined_names_by_paths)
+    update_chained_scripts(scripts_by_paths=scripts_by_paths,
+                           defined_names_by_paths=defined_names_by_paths)
+    sorted_scripts_by_paths = OrderedDict(sort_scripts(scripts_by_paths.items()))
     if graphviz_file_name:
         export_graphviz(graphviz_file_name=graphviz_file_name,
                         graphviz_rendering_format=graphviz_rendering_format,
                         graphviz_layout_command=graphviz_layout_command,
-                        scripts_by_paths=sorted_scripts_by_paths)
+                        scripts_by_paths=sorted_scripts_by_paths,
+                        defined_names_by_paths=defined_names_by_paths)
     if output_file_name:
         export_json(output_file_name=output_file_name,
                     scripts_by_paths=sorted_scripts_by_paths)
@@ -110,11 +114,14 @@ def export_graphviz(*,
                     graphviz_file_name: str,
                     graphviz_rendering_format: str,
                     graphviz_layout_command: str,
-                    scripts_by_paths: Dict[str, SQLScript]) -> None:
+                    scripts_by_paths: Dict[str, SQLScript],
+                    defined_names_by_paths: Dict[str, Set[str]]
+                    ) -> None:
     dependencies_graph = Digraph(format=graphviz_rendering_format,
                                  engine=graphviz_layout_command)
     set_dependencies_graph_nodes(graph=dependencies_graph,
-                                 scripts_by_paths=scripts_by_paths)
+                                 scripts_by_paths=scripts_by_paths,
+                                 defined_names_by_paths=defined_names_by_paths)
 
     graphviz_source_file_name = graphviz_file_name + GRAPHVIZ_FILE_EXTENSION
     dependencies_graph.save(filename=graphviz_source_file_name)
@@ -124,15 +131,16 @@ def export_graphviz(*,
 
 def set_dependencies_graph_nodes(*,
                                  graph: Digraph,
-                                 scripts_by_paths: Dict[str, SQLScript]
+                                 scripts_by_paths: Dict[str, SQLScript],
+                                 defined_names_by_paths: Dict[str, Set[str]]
                                  ) -> None:
-    for path, script in scripts_by_paths.items():
-        graph.node(path, label=', '.join(script.defined))
+    for path, defined_names in defined_names_by_paths.items():
+        graph.node(path, label=', '.join(defined_names))
     for path, script in scripts_by_paths.items():
         dependencies_paths = filter(None, (
-            identifier_path(identifier,
-                            scripts_by_paths=scripts_by_paths)
-            for identifier in script.used))
+            name_path(name,
+                      defined_names_by_paths=defined_names_by_paths)
+            for name in script.used))
         for dependency_path in dependencies_paths:
             graph.edge(dependency_path, path)
 
@@ -153,10 +161,10 @@ def normalize(scripts_by_paths: Dict[str, SQLScript]
     for script_path, script in scripts_by_paths.items():
         defined_identifiers = list(script.defined)
         defined_identifiers.sort()
-        used_identifiers = list(script.used)
-        used_identifiers.sort()
+        used_names = list(script.used)
+        used_names.sort()
         script = OrderedDict(defined=defined_identifiers,
-                             used=used_identifiers)
+                             used=used_names)
         yield script_path, script
 
 
@@ -171,8 +179,8 @@ def sort_scripts(scripts_by_paths: Iterable[Tuple[str, SQLScript]]
                 # insertion should be before script
                 # in which one of current script's defined identifiers is used
                 start=0)
-             if any(defined_identifier in other_script.used
-                    for defined_identifier in script.defined)),
+             if any(identifier.name in other_script.used
+                    for identifier in script.defined)),
             default=0)
         index_by_used = max(
             (index
@@ -181,46 +189,49 @@ def sort_scripts(scripts_by_paths: Iterable[Tuple[str, SQLScript]]
                 # insertion should be after script
                 # in which one of current script's used identifiers is defined
                 start=1)
-             if any(used_identifier in other_script.defined
-                    for used_identifier in script.used)),
+             if any(used_name in script_defined_names(other_script)
+                    for used_name in script.used)),
             default=0)
         index = max(index_by_defined, index_by_used)
         res.insert(index, (path, script))
     return res
 
 
-def check_scripts_circular_dependencies(scripts_by_paths: Dict[str, SQLScript]
+def check_scripts_circular_dependencies(*,
+                                        scripts_by_paths: Dict[str, SQLScript],
+                                        defined_names_by_paths: Dict[str, Set[str]]
                                         ) -> None:
     for script in scripts_by_paths.values():
         check_script_circular_dependencies(script=script,
-                                           defined_identifiers=set(),
-                                           scripts_by_paths=scripts_by_paths)
+                                           defined_names=set(),
+                                           scripts_by_paths=scripts_by_paths,
+                                           defined_names_by_paths=defined_names_by_paths)
 
 
 def check_script_circular_dependencies(*,
                                        script: SQLScript,
-                                       defined_identifiers: Set[str],
-                                       scripts_by_paths: Dict[str, SQLScript]
+                                       defined_names: Set[str],
+                                       scripts_by_paths: Dict[str, SQLScript],
+                                       defined_names_by_paths: Dict[str, Set[str]]
                                        ) -> None:
-    defined_identifiers = defined_identifiers | script.defined
-    for identifier in script.used:
-        dependency_path = identifier_path(identifier,
-                                          scripts_by_paths=scripts_by_paths)
+    defined_names = defined_names | script_defined_names(script)
+    for name in script.used:
+        dependency_path = name_path(name,
+                                    defined_names_by_paths=defined_names_by_paths)
         try:
             dependency = scripts_by_paths[dependency_path]
         except KeyError:
             continue
         try:
-            cyclic_identifier = next(identifier
-                                     for identifier in dependency.used
-                                     if identifier in defined_identifiers)
-            cyclic_identifier_path = identifier_path(
-                cyclic_identifier,
-                scripts_by_paths=scripts_by_paths)
+            cyclic_name = next(name
+                               for name in dependency.used
+                               if name in defined_names)
+            cyclic_name_path = name_path(cyclic_name,
+                                         defined_names_by_paths=defined_names_by_paths)
             err_msg = ('Cyclic usage found: '
-                       f'identifier "{cyclic_identifier}" '
+                       f'name "{cyclic_name}" '
                        'is defined in script '
-                       f'"{cyclic_identifier_path}" '
+                       f'"{cyclic_name_path}" '
                        'which is one of '
                        f'located at "{dependency_path}" '
                        'script users.')
@@ -228,46 +239,52 @@ def check_script_circular_dependencies(*,
         except StopIteration:
             check_script_circular_dependencies(
                 script=dependency,
-                defined_identifiers=defined_identifiers,
-                scripts_by_paths=scripts_by_paths)
+                defined_names=defined_names,
+                scripts_by_paths=scripts_by_paths,
+                defined_names_by_paths=defined_names_by_paths)
 
 
-def update_chained_scripts(scripts_by_paths: Dict[str, SQLScript]
+def script_defined_names(script: SQLScript) -> Set[str]:
+    return {identifier.name for identifier in script.defined}
+
+
+def update_chained_scripts(*,
+                           scripts_by_paths: Dict[str, SQLScript],
+                           defined_names_by_paths: Dict[str, Set[str]]
                            ) -> None:
-    scripts_by_paths_copy = copy.deepcopy(
-        scripts_by_paths)
+    scripts_by_paths_copy = copy.deepcopy(scripts_by_paths)
 
     for path, script_copy in scripts_by_paths_copy.items():
-        unprocessed_identifiers = copy.deepcopy(script_copy.used)
+        unprocessed_dependencies_names = copy.deepcopy(script_copy.used)
         try:
             while True:
-                identifier = unprocessed_identifiers.pop()
-                extension_path = identifier_path(identifier,
-                                                 scripts_by_paths=scripts_by_paths_copy)
+                name = unprocessed_dependencies_names.pop()
+                dependency_path = name_path(
+                    name,
+                    defined_names_by_paths=defined_names_by_paths)
                 try:
-                    extension = scripts_by_paths[extension_path]
+                    dependency = scripts_by_paths[dependency_path]
                 except KeyError:
                     continue
 
-                unprocessed_identifiers |= extension.used
+                unprocessed_dependencies_names |= dependency.used
 
                 script = scripts_by_paths[path]
-                used = (
-                    script.used
-                    | extension.used
-                    | extension.defined)
+                used = (script.used
+                        | dependency.used
+                        | defined_names_by_paths[dependency_path])
                 scripts_by_paths[path] = script._replace(used=used)
         except KeyError:
             continue
 
 
-def identifier_path(identifier: str,
-                    *,
-                    scripts_by_paths: Dict[str, SQLScript]
-                    ) -> Optional[str]:
+def name_path(name: str,
+              *,
+              defined_names_by_paths: Dict[str, Set[str]]
+              ) -> Optional[str]:
     paths = [path
-             for path, script in scripts_by_paths.items()
-             if identifier in script.defined]
+             for path, defined_names in defined_names_by_paths.items()
+             if name in defined_names]
     try:
         path, = paths
         return path
@@ -276,13 +293,13 @@ def identifier_path(identifier: str,
             paths_str = ', '.join(paths)
             err_msg = ('Requested module name is ambiguous: '
                        f'found {len(paths)} appearances '
-                       f'of identifier "{identifier}" '
+                       f'of name "{name}" '
                        'in scripts definitions within '
                        f'files located at {paths_str}.')
             raise ValueError(err_msg) from err
         warn_msg = ('Requested identifier is not found: '
                     'no appearance '
-                    f'of identifier "{identifier}" '
+                    f'of name "{name}" '
                     'in scripts definitions.')
         logger.warning(warn_msg)
         return None
@@ -302,7 +319,7 @@ def parse_scripts(paths: Iterable[str]
     for script_path, raw_script_str in read_scripts(paths):
         script = SQLScript(
             defined=set(script_defined_identifiers(raw_script_str)),
-            used=set(script_used_identifiers(raw_script_str)))
+            used=set(script_used_names(raw_script_str)))
         yield script_path, script
 
 
@@ -323,11 +340,11 @@ def filtered_script_identifiers(
         yield from statement_identifiers_filter(statement)
 
 
-def is_used_identifier(identifier: Union[Identifier,
-                                         IdentifierList]
+def is_used_identifier(token: Union[Identifier,
+                                    IdentifierList]
                        ) -> bool:
     try:
-        tokens = list(filtered_tokens(identifier.tokens))
+        tokens = list(filtered_tokens(token.tokens))
     except AttributeError:
         return False
     else:
@@ -335,14 +352,10 @@ def is_used_identifier(identifier: Union[Identifier,
             # look further
             return False
 
-    parent = identifier.parent
+    parent = token.parent
     if isinstance(parent, IdentifierList):
         return is_used_identifier(parent)
-    siblings = list(filtered_tokens(parent.tokens))
-    token_index = next(index
-                       for index, sibling in enumerate(siblings)
-                       if sibling is identifier)
-    older_tokens = siblings[:token_index]
+    older_tokens = list(get_older_tokens(token))
     try:
         nearest_older_token = older_tokens[-1]
     except IndexError:
@@ -365,29 +378,44 @@ def is_defined_identifier(identifier: Identifier) -> bool:
     return DEFINITION_KEYWORDS_RE.match(first_parent_keyword_str) is not None
 
 
-def filtered_token_identifiers(token: Token,
-                               *,
-                               identifiers_filter: Callable[[Token], bool]
-                               ) -> Iterable[str]:
+def token_used_identifiers(token: Token) -> Iterable[str]:
     try:
         tokens = filtered_tokens(token.tokens)
     except AttributeError:
         return
     for token in tokens:
-        if is_identifier(token) and identifiers_filter(token):
+        if is_identifier(token) and is_used_identifier(token):
             yield token.normalized
             continue
-        yield from filtered_token_identifiers(
-            token,
-            identifiers_filter=identifiers_filter)
+        yield from token_used_identifiers(token)
 
 
-token_used_identifiers = partial(filtered_token_identifiers,
-                                 identifiers_filter=is_used_identifier)
-token_defined_identifiers = partial(filtered_token_identifiers,
-                                    identifiers_filter=is_defined_identifier)
+def token_defined_identifiers(token: Token) -> Iterable[str]:
+    try:
+        tokens = filtered_tokens(token.tokens)
+    except AttributeError:
+        return
+    for token in tokens:
+        if is_identifier(token) and is_defined_identifier(token):
+            older_tokens = get_older_tokens(token)
+            older_keywords = list(filter(is_keyword, older_tokens))
+            identifier_type = older_keywords[1].normalized
+            yield SQLIdentifier(type=identifier_type,
+                                name=token.normalized)
+            continue
+        yield from token_defined_identifiers(token)
 
-script_used_identifiers = partial(
+
+def get_older_tokens(token: Token) -> Iterable[Token]:
+    def older(sibling: Token) -> bool:
+        # we assume that siblings are ordered
+        return sibling is not token
+
+    siblings = filtered_tokens(token.parent.tokens)
+    yield from takewhile(older, siblings)
+
+
+script_used_names = partial(
     filtered_script_identifiers,
     statement_identifiers_filter=token_used_identifiers)
 script_defined_identifiers = partial(
@@ -401,6 +429,10 @@ def filtered_tokens(tokens: Iterable[Token]) -> Iterable[Token]:
 
 def is_identifier(token: Token) -> bool:
     return isinstance(token, Identifier)
+
+
+def is_keyword(token: Token) -> bool:
+    return token.is_keyword
 
 
 def is_filler(token: Token) -> bool:
