@@ -1,0 +1,10 @@
+CREATE OR REPLACE FUNCTION diff_in_minutes(max_date TIMESTAMP WITHOUT TIME ZONE, min_date TIMESTAMP WITHOUT TIME ZONE) RETURNS DOUBLE PRECISION AS $$
+DECLARE
+    diff INTERVAL := max_date - min_date;
+BEGIN
+RETURN 
+    (DATE_PART('day', diff) * 24 + DATE_PART('hour', diff)) * 60 +
+    DATE_PART('minute', diff);
+END;
+$$ LANGUAGE PLPGSQL
+IMMUTABLE;
