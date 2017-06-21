@@ -1,0 +1,4 @@
+CREATE TABLE t_unique_key
+(
+    f_next BIGINT DEFAULT 0 PRIMARY KEY NOT NULL
+);

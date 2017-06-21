@@ -1,0 +1,4 @@
+CREATE TABLE t_global
+(
+    f_id INTEGER DEFAULT 1 PRIMARY KEY NOT NULL
+);

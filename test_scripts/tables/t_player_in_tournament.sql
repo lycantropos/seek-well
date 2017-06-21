@@ -1,0 +1,26 @@
+CREATE TABLE t_player_in_tournament
+(
+    f_id BIGINT DEFAULT 0 PRIMARY KEY NOT NULL,
+    f_player_id BIGINT DEFAULT 0 NOT NULL,
+    f_tournament_id BIGINT DEFAULT 0 NOT NULL,
+    f_out_level INTEGER DEFAULT 0 NOT NULL,
+    f_place INTEGER DEFAULT 0 NOT NULL,
+    f_participated INTEGER DEFAULT 0 NOT NULL,
+    f_registered_stamp TIMESTAMP NOT NULL,
+    f_buy_in BIGINT DEFAULT 0 NOT NULL,
+    f_prize BIGINT DEFAULT 0 NOT NULL,
+    f_entry_fee BIGINT DEFAULT 0 NOT NULL,
+    f_place_to INTEGER DEFAULT 0 NOT NULL,
+    f_prize2 INTEGER DEFAULT 0 NOT NULL,
+    f_extra_buy_in BIGINT DEFAULT 0 NOT NULL,
+    f_number_rebuy BIGINT DEFAULT 0 NOT NULL,
+    f_number_addon BIGINT DEFAULT 0 NOT NULL,
+    f_with_ticket SMALLINT DEFAULT 0 NOT NULL,
+    f_addon_made SMALLINT DEFAULT 0 NOT NULL,
+    f_satellite_id BIGINT DEFAULT 0 NOT NULL,
+    f_won_ticket SMALLINT DEFAULT 0 NOT NULL,
+    f_entry_fee_transaction_id BIGINT DEFAULT 0 NOT NULL,
+    f_second_entry_fee_transaction_id BIGINT DEFAULT 0 NOT NULL,
+    f_entry_ticket_id BIGINT DEFAULT 0 NOT NULL,
+    f_prize_ticket_id BIGINT DEFAULT 0 NOT NULL
+);
