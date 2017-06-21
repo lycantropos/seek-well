@@ -61,28 +61,6 @@ USAGE_KEYWORDS_RE = re.compile(
     r')$')
 ALIAS_KEYWORDS_RE = re.compile(r'^AS$')
 
-DROP_ALL_VIEWS_STATEMENT_PATTERN = """DO $$
-DECLARE
-  drop_query TEXT;
-BEGIN
-  EXECUTE '
-    SELECT
-    ''DROP {type} ''
-    || string_agg(classes.oid :: REGCLASS :: TEXT, '', '')
-    || '' CASCADE''
-    FROM pg_catalog.pg_class AS classes
-    JOIN pg_namespace AS namespace ON namespace.oid = classes.relnamespace
-    WHERE classes.relkind = ''{type_alias}'' AND
-          namespace.nspname NOT IN (''information_schema'', ''pg_catalog'')'
-  INTO STRICT drop_query;
-  EXECUTE drop_query;
-  EXCEPTION
-  WHEN null_value_not_allowed
-    THEN RAISE NOTICE 'No {type}s found';
-END$$;
-"""
-VIEWS_ALIASES = {'MATERIALIZED VIEW': 'm',
-                 'VIEW': 'v'}
 MATERIALIZED_VIEW_TYPE = 'MATERIALIZED VIEW'
 
 SQLScript = namedtuple('SQLScript', ['used', 'defined'])
@@ -105,9 +83,6 @@ def main() -> None:
               help='SQL script name for consecutive '
                    'drop and initialization '
                    '(".sql" extension will be added automatically).')
-@click.option('--drop-views', '-d',
-              is_flag=True,
-              help='Adds dropping all views to initializer.')
 @click.option('--refresher-file-name', '-r',
               default=None,
               type=str,
@@ -132,7 +107,6 @@ def main() -> None:
               type=click.Choice(FORMATS))
 def run(path: str,
         initializer_file_name: str,
-        drop_views: bool,
         refresher_file_name: str,
         json_file_name: str,
         graphviz_file_name: str,
@@ -156,8 +130,7 @@ def run(path: str,
                                                        .items()))
     if initializer_file_name:
         generate_initializer(file_name=initializer_file_name,
-                             scripts_by_paths=sorted_scripts_by_paths,
-                             drop_views=drop_views)
+                             scripts_by_paths=sorted_scripts_by_paths)
     if refresher_file_name:
         generate_refresher(file_name=refresher_file_name,
                            scripts_by_paths=sorted_scripts_by_paths)
@@ -174,24 +147,14 @@ def run(path: str,
 
 def generate_initializer(*,
                          file_name: str,
-                         scripts_by_paths: Dict[str, SQLScript],
-                         drop_views: bool = False
+                         scripts_by_paths: Dict[str, SQLScript]
                          ) -> None:
     file_name += SCRIPT_FILE_EXTENSION
     with open(file_name, mode='w') as file:
-        file.writelines(initializer(scripts_by_paths,
-                                    drop_views=drop_views))
+        file.writelines(initializer(scripts_by_paths))
 
 
-def initializer(scripts_by_paths: Dict[str, SQLScript],
-                *,
-                drop_views: bool = False
-                ) -> Iterable[str]:
-    if drop_views:
-        for structure_type, structure_alias in VIEWS_ALIASES.items():
-            yield (DROP_ALL_VIEWS_STATEMENT_PATTERN
-                   .format(type=structure_type,
-                           type_alias=structure_alias))
+def initializer(scripts_by_paths: Dict[str, SQLScript]) -> Iterable[str]:
     for path in scripts_by_paths:
         yield f'\i {quote(path)}\n'
 
