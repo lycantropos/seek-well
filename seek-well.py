@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.6
 import copy
 import json
 import logging
@@ -9,10 +9,12 @@ from collections import (OrderedDict,
 from functools import partial
 from itertools import (filterfalse,
                        takewhile)
+from shlex import quote
 from typing import (Union,
                     Optional,
                     Callable,
                     Iterable,
+                    Iterator,
                     Dict,
                     Tuple,
                     Set,
@@ -37,10 +39,11 @@ __version__ = '0.0.1'
 logger = logging.getLogger(__name__)
 
 # adding PostgreSQL specific keywords
-SQL_REGEX.insert(0, (re.compile(r'MATERIALIZED\s+VIEW', FLAGS).match, Keyword))
+SQL_REGEX.insert(0, (re.compile(r'MATERIALIZED\s+VIEW', FLAGS).match,
+                     Keyword))
 
-SQL_SCRIPTS_EXTENSIONS = {'.sql'}
-OUTPUT_FILE_EXTENSION = '.json'
+SCRIPT_FILE_EXTENSION = '.sql'
+JSON_FILE_EXTENSION = '.json'
 GRAPHVIZ_FILE_EXTENSION = '.gv'
 
 DEFINITION_KEYWORDS_RE = re.compile(r'^CREATE(\s+OR\s+REPLACE)?$')
@@ -56,6 +59,31 @@ USAGE_KEYWORDS_RE = re.compile(
     r'|'
     r'FROM'
     r')$')
+ALIAS_KEYWORDS_RE = re.compile(r'^AS$')
+
+DROP_ALL_VIEWS_STATEMENT_PATTERN = """DO $$
+DECLARE
+  drop_query TEXT;
+BEGIN
+  EXECUTE '
+    SELECT
+    ''DROP {type} ''
+    || string_agg(classes.oid :: REGCLASS :: TEXT, '', '')
+    || '' CASCADE''
+    FROM pg_catalog.pg_class AS classes
+    JOIN pg_namespace AS namespace ON namespace.oid = classes.relnamespace
+    WHERE classes.relkind = ''{type_alias}'' AND
+          namespace.nspname NOT IN (''information_schema'', ''pg_catalog'')'
+  INTO STRICT drop_query;
+  EXECUTE drop_query;
+  EXCEPTION
+  WHEN null_value_not_allowed
+    THEN RAISE NOTICE 'No {type}s found';
+END$$;
+"""
+VIEWS_ALIASES = {'MATERIALIZED VIEW': 'm',
+                 'VIEW': 'v'}
+MATERIALIZED_VIEW_TYPE = 'MATERIALIZED VIEW'
 
 SQLScript = namedtuple('SQLScript', ['used', 'defined'])
 SQLIdentifier = namedtuple('SQLIdentifier', ['type', 'name'])
@@ -71,7 +99,22 @@ def main() -> None:
               default=os.getcwd(),
               type=click.Path(),
               help='Target scripts directory path.')
-@click.option('--output-file-name', '-o',
+@click.option('--initializer-file-name', '-i',
+              default=None,
+              type=str,
+              help='SQL script name for consecutive '
+                   'drop and initialization '
+                   '(".sql" extension will be added automatically).')
+@click.option('--drop-views', '-d',
+              is_flag=True,
+              help='Adds dropping all views to initializer.')
+@click.option('--refresher-file-name', '-r',
+              default=None,
+              type=str,
+              help='SQL script name for consecutive '
+                   'materialized views refreshing '
+                   '(".sql" extension will be added automatically).')
+@click.option('--json-file-name', '-j',
               default=None,
               type=str,
               help='JSON output file name '
@@ -84,11 +127,14 @@ def main() -> None:
 @click.option('--graphviz-layout-command', '-l',
               default=None,
               type=click.Choice(ENGINES))
-@click.option('--graphviz-rendering-format', '-r',
+@click.option('--graphviz-rendering-format', '-f',
               default=None,
               type=click.Choice(FORMATS))
 def run(path: str,
-        output_file_name: str,
+        initializer_file_name: str,
+        drop_views: bool,
+        refresher_file_name: str,
+        json_file_name: str,
         graphviz_file_name: str,
         graphviz_layout_command: str,
         graphviz_rendering_format: str) -> None:
@@ -100,38 +146,94 @@ def run(path: str,
     scripts_by_paths = dict(parse_scripts(paths))
     defined_names_by_paths = {path: script_defined_names(script)
                               for path, script in scripts_by_paths.items()}
-    check_scripts_circular_dependencies(scripts_by_paths=scripts_by_paths,
-                                        defined_names_by_paths=defined_names_by_paths)
-    update_chained_scripts(scripts_by_paths=scripts_by_paths,
-                           defined_names_by_paths=defined_names_by_paths)
-    sorted_scripts_by_paths = OrderedDict(sort_scripts(scripts_by_paths.items()))
+    check_scripts_circular_dependencies(
+        scripts_by_paths=scripts_by_paths,
+        defined_names_by_paths=defined_names_by_paths)
+    update_chained_scripts(
+        scripts_by_paths=scripts_by_paths,
+        defined_names_by_paths=defined_names_by_paths)
+    sorted_scripts_by_paths = OrderedDict(sort_scripts(scripts_by_paths
+                                                       .items()))
+    if initializer_file_name:
+        generate_initializer(file_name=initializer_file_name,
+                             scripts_by_paths=sorted_scripts_by_paths,
+                             drop_views=drop_views)
+    if refresher_file_name:
+        generate_refresher(file_name=refresher_file_name,
+                           scripts_by_paths=sorted_scripts_by_paths)
     if graphviz_file_name:
-        export_graphviz(graphviz_file_name=graphviz_file_name,
-                        graphviz_rendering_format=graphviz_rendering_format,
-                        graphviz_layout_command=graphviz_layout_command,
+        export_graphviz(file_name=graphviz_file_name,
+                        rendering_format=graphviz_rendering_format,
+                        layout_command=graphviz_layout_command,
                         scripts_by_paths=sorted_scripts_by_paths,
                         defined_names_by_paths=defined_names_by_paths)
-    if output_file_name:
-        export_json(output_file_name=output_file_name,
+    if json_file_name:
+        export_json(file_name=json_file_name,
                     scripts_by_paths=sorted_scripts_by_paths)
 
 
+def generate_initializer(*,
+                         file_name: str,
+                         scripts_by_paths: Dict[str, SQLScript],
+                         drop_views: bool = False
+                         ) -> None:
+    file_name += SCRIPT_FILE_EXTENSION
+    with open(file_name, mode='w') as file:
+        file.writelines(initializer(scripts_by_paths,
+                                    drop_views=drop_views))
+
+
+def initializer(scripts_by_paths: Dict[str, SQLScript],
+                *,
+                drop_views: bool = False
+                ) -> Iterable[str]:
+    if drop_views:
+        for structure_type, structure_alias in VIEWS_ALIASES.items():
+            yield (DROP_ALL_VIEWS_STATEMENT_PATTERN
+                   .format(type=structure_type,
+                           type_alias=structure_alias))
+    for path in scripts_by_paths:
+        yield f'\i {quote(path)}\n'
+
+
+def generate_refresher(*,
+                       file_name: str,
+                       scripts_by_paths: Dict[str, SQLScript]
+                       ) -> None:
+    file_name += SCRIPT_FILE_EXTENSION
+    with open(file_name, mode='w') as file:
+        file.writelines(refresher(scripts_by_paths))
+
+
+def refresher(scripts_by_paths: Dict[str, SQLScript]
+              ) -> Iterable[str]:
+    def is_materialized_view(identifier: SQLIdentifier) -> bool:
+        return identifier.type == MATERIALIZED_VIEW_TYPE
+
+    for script in scripts_by_paths.values():
+        materialized_view_identifiers = filter(is_materialized_view,
+                                               script.defined)
+        for identifier in materialized_view_identifiers:
+            yield (f'REFRESH {MATERIALIZED_VIEW_TYPE} {identifier.name} '
+                   f'WITH DATA;\n')
+
+
 def export_graphviz(*,
-                    graphviz_file_name: str,
-                    graphviz_rendering_format: str,
-                    graphviz_layout_command: str,
+                    file_name: str,
+                    rendering_format: str,
+                    layout_command: str,
                     scripts_by_paths: Dict[str, SQLScript],
                     defined_names_by_paths: Dict[str, Set[str]]
                     ) -> None:
-    dependencies_graph = Digraph(format=graphviz_rendering_format,
-                                 engine=graphviz_layout_command)
+    dependencies_graph = Digraph(format=rendering_format,
+                                 engine=layout_command)
     set_dependencies_graph_nodes(graph=dependencies_graph,
                                  scripts_by_paths=scripts_by_paths,
                                  defined_names_by_paths=defined_names_by_paths)
 
-    graphviz_source_file_name = graphviz_file_name + GRAPHVIZ_FILE_EXTENSION
-    dependencies_graph.save(filename=graphviz_source_file_name)
-    dependencies_graph.render(filename=graphviz_file_name,
+    source_file_name = file_name + GRAPHVIZ_FILE_EXTENSION
+    dependencies_graph.save(filename=source_file_name)
+    dependencies_graph.render(filename=file_name,
                               cleanup=True)
 
 
@@ -143,41 +245,43 @@ def set_dependencies_graph_nodes(*,
     for path, defined_names in defined_names_by_paths.items():
         graph.node(path, label=', '.join(defined_names))
     for path, script in scripts_by_paths.items():
-        dependencies_paths = filter(None, (
-            name_path(name,
-                      defined_names_by_paths=defined_names_by_paths)
-            for name in script.used))
+        dependencies_paths = filter(
+            None,
+            (name_path(name,
+                       defined_names_by_paths=defined_names_by_paths)
+             for name in script.used))
         for dependency_path in dependencies_paths:
             graph.edge(dependency_path, path)
 
 
 def export_json(*,
-                output_file_name: str,
+                file_name: str,
                 scripts_by_paths: Dict[str, SQLScript]) -> None:
-    output_file_name += OUTPUT_FILE_EXTENSION
-    with open(output_file_name, mode='w') as output_file:
-        normalized_scripts_by_paths = OrderedDict(normalize(scripts_by_paths))
+    file_name += JSON_FILE_EXTENSION
+    with open(file_name, mode='w') as file:
+        normalized_scripts_by_paths = OrderedDict(normalize(scripts_by_paths
+                                                            .items()))
         json.dump(obj=normalized_scripts_by_paths,
-                  fp=output_file,
+                  fp=file,
                   indent=True)
 
 
-def normalize(scripts_by_paths: Dict[str, SQLScript]
+def normalize(paths_scripts: Iterable[Tuple[str, SQLScript]]
               ) -> Iterable[Tuple[str, OrderedDict]]:
-    for script_path, script in scripts_by_paths.items():
+    for path, script in paths_scripts:
         defined_identifiers = list(script.defined)
         defined_identifiers.sort()
         used_names = list(script.used)
         used_names.sort()
         script = OrderedDict(defined=defined_identifiers,
                              used=used_names)
-        yield script_path, script
+        yield path, script
 
 
-def sort_scripts(scripts_by_paths: Iterable[Tuple[str, SQLScript]]
+def sort_scripts(paths_scripts: Iterable[Tuple[str, SQLScript]]
                  ) -> List[Tuple[str, SQLScript]]:
     res = list()
-    for path, script in scripts_by_paths:
+    for path, script in paths_scripts:
         index_by_defined = min(
             (index
              for index, (_, other_script) in enumerate(
@@ -203,27 +307,30 @@ def sort_scripts(scripts_by_paths: Iterable[Tuple[str, SQLScript]]
     return res
 
 
-def check_scripts_circular_dependencies(*,
-                                        scripts_by_paths: Dict[str, SQLScript],
-                                        defined_names_by_paths: Dict[str, Set[str]]
-                                        ) -> None:
+def check_scripts_circular_dependencies(
+        *,
+        scripts_by_paths: Dict[str, SQLScript],
+        defined_names_by_paths: Dict[str, Set[str]]) -> None:
     for script in scripts_by_paths.values():
-        check_script_circular_dependencies(script=script,
-                                           defined_names=set(),
-                                           scripts_by_paths=scripts_by_paths,
-                                           defined_names_by_paths=defined_names_by_paths)
+        check_script_circular_dependencies(
+            script=script,
+            defined_names=set(),
+            scripts_by_paths=scripts_by_paths,
+            defined_names_by_paths=defined_names_by_paths)
 
 
-def check_script_circular_dependencies(*,
-                                       script: SQLScript,
-                                       defined_names: Set[str],
-                                       scripts_by_paths: Dict[str, SQLScript],
-                                       defined_names_by_paths: Dict[str, Set[str]]
-                                       ) -> None:
+def check_script_circular_dependencies(
+        *,
+        script: SQLScript,
+        defined_names: Set[str],
+        scripts_by_paths: Dict[str, SQLScript],
+        defined_names_by_paths: Dict[str, Set[str]]) -> None:
+    # TODO: find out why augmented assignment doesn't work properly sometimes
     defined_names = defined_names | script_defined_names(script)
     for name in script.used:
-        dependency_path = name_path(name,
-                                    defined_names_by_paths=defined_names_by_paths)
+        dependency_path = name_path(
+            name,
+            defined_names_by_paths=defined_names_by_paths)
         try:
             dependency = scripts_by_paths[dependency_path]
         except KeyError:
@@ -232,8 +339,9 @@ def check_script_circular_dependencies(*,
             cyclic_name = next(name
                                for name in dependency.used
                                if name in defined_names)
-            cyclic_name_path = name_path(cyclic_name,
-                                         defined_names_by_paths=defined_names_by_paths)
+            cyclic_name_path = name_path(
+                cyclic_name,
+                defined_names_by_paths=defined_names_by_paths)
             err_msg = ('Cyclic usage found: '
                        f'name "{cyclic_name}" '
                        'is defined in script '
@@ -315,39 +423,91 @@ def scripts_paths(path: str) -> Iterable[str]:
     for root, directories, files_names in os.walk(path):
         for file_name in files_names:
             _, extension = os.path.splitext(file_name)
-            if extension not in SQL_SCRIPTS_EXTENSIONS:
+            if extension != SCRIPT_FILE_EXTENSION:
                 continue
             yield os.path.join(root, file_name)
 
 
 def parse_scripts(paths: Iterable[str]
                   ) -> Iterable[Tuple[str, SQLScript]]:
-    for script_path, raw_script_str in read_scripts(paths):
-        script = SQLScript(
-            defined=set(script_defined_identifiers(raw_script_str)),
-            used=set(script_used_names(raw_script_str)))
-        yield script_path, script
+    for path, raw_script_str in read_scripts(paths):
+        used_names = (set(script_used_names(raw_script_str))
+                      - set(script_aliases(raw_script_str)))
+        defined_identifiers = set(script_defined_identifiers(raw_script_str))
+        yield path, SQLScript(defined=defined_identifiers,
+                              used=used_names)
 
 
 def read_scripts(paths: Iterable[str]) -> Iterable[Tuple[str, str]]:
-    for script_path in paths:
-        with open(script_path) as raw_script:
+    for path in paths:
+        with open(path) as raw_script:
             raw_script_str = raw_script.read()
-        yield script_path, raw_script_str
+        yield path, raw_script_str
 
 
-def filtered_script_identifiers(
+def filtered_script_names_or_identifiers(
         raw_script: str,
         *,
-        statement_identifiers_filter: Callable[[Token], Iterable[str]]
+        names_or_identifiers_filter: Callable[[Token], Iterable[str]]
 ) -> Iterable[Token]:
     statements = sqlparse.parsestream(raw_script)
     for statement in statements:
-        yield from statement_identifiers_filter(statement)
+        yield from names_or_identifiers_filter(statement)
 
 
-def is_used_identifier(token: Union[Identifier,
-                                    IdentifierList]
+def token_used_names(token: Token) -> Iterable[str]:
+    try:
+        tokens = filtered_tokens(token.tokens)
+    except AttributeError:
+        return
+    for token in tokens:
+        if is_identifier(token) and is_used_identifier(token):
+            yield token.normalized
+            continue
+        yield from token_used_names(token)
+
+
+def token_defined_identifiers(token: Token) -> Iterable[SQLIdentifier]:
+    try:
+        tokens = filtered_tokens(token.tokens)
+    except AttributeError:
+        return
+    for token in tokens:
+        if is_identifier(token) and is_defined_identifier(token):
+            older_siblings = older_tokens(token)
+            older_keywords = list(filter(is_keyword, older_siblings))
+            identifier_type = older_keywords[1].normalized
+            yield SQLIdentifier(type=identifier_type,
+                                name=token.normalized)
+            continue
+        yield from token_defined_identifiers(token)
+
+
+def token_aliases(token: Token) -> Iterable[str]:
+    try:
+        tokens = filtered_tokens(token.tokens)
+    except AttributeError:
+        return
+    for token in tokens:
+        if is_identifier(token) and is_alias(token):
+            yield token.normalized
+        yield from token_aliases(token)
+
+
+script_used_names = partial(
+    filtered_script_names_or_identifiers,
+    names_or_identifiers_filter=token_used_names)
+
+script_defined_identifiers = partial(
+    filtered_script_names_or_identifiers,
+    names_or_identifiers_filter=token_defined_identifiers)
+
+script_aliases = partial(
+    filtered_script_names_or_identifiers,
+    names_or_identifiers_filter=token_aliases)
+
+
+def is_used_identifier(token: Union[Identifier, IdentifierList]
                        ) -> bool:
     try:
         tokens = list(filtered_tokens(token.tokens))
@@ -361,7 +521,7 @@ def is_used_identifier(token: Union[Identifier,
     parent = token.parent
     if isinstance(parent, IdentifierList):
         return is_used_identifier(parent)
-    older_siblings = list(token_older_siblings(token))
+    older_siblings = list(older_tokens(token))
     try:
         nearest_older_sibling = older_siblings[-1]
     except IndexError:
@@ -382,35 +542,19 @@ def is_defined_identifier(identifier: Identifier) -> bool:
     return DEFINITION_KEYWORDS_RE.match(first_parent_keyword_str) is not None
 
 
-def token_used_identifiers(token: Token) -> Iterable[str]:
+def is_alias(token: Union[Identifier, IdentifierList]
+             ) -> bool:
+    children = child_tokens(token)
     try:
-        tokens = filtered_tokens(token.tokens)
-    except AttributeError:
-        return
-    for token in tokens:
-        if is_identifier(token) and is_used_identifier(token):
-            yield token.normalized
-            continue
-        yield from token_used_identifiers(token)
+        nearest_child = next(children)
+    except StopIteration:
+        return False
+    nearest_child_str = (nearest_child
+                         .normalized.upper())
+    return ALIAS_KEYWORDS_RE.match(nearest_child_str) is not None
 
 
-def token_defined_identifiers(token: Token) -> Iterable[str]:
-    try:
-        tokens = filtered_tokens(token.tokens)
-    except AttributeError:
-        return
-    for token in tokens:
-        if is_identifier(token) and is_defined_identifier(token):
-            older_siblings = token_older_siblings(token)
-            older_keywords = list(filter(is_keyword, older_siblings))
-            identifier_type = older_keywords[1].normalized
-            yield SQLIdentifier(type=identifier_type,
-                                name=token.normalized)
-            continue
-        yield from token_defined_identifiers(token)
-
-
-def token_older_siblings(token: Token) -> Iterable[Token]:
+def older_tokens(token: Token) -> Iterable[Token]:
     def older(sibling: Token) -> bool:
         # we assume that siblings are ordered
         return sibling is not token
@@ -419,16 +563,14 @@ def token_older_siblings(token: Token) -> Iterable[Token]:
     yield from takewhile(older, siblings)
 
 
-script_used_names = partial(
-    filtered_script_identifiers,
-    statement_identifiers_filter=token_used_identifiers)
-script_defined_identifiers = partial(
-    filtered_script_identifiers,
-    statement_identifiers_filter=token_defined_identifiers)
+def child_tokens(token: Token) -> Iterator[Token]:
+    children = filtered_tokens(token.tokens)
+    next(children)
+    yield from children
 
 
-def filtered_tokens(tokens: Iterable[Token]) -> Iterable[Token]:
-    return filterfalse(is_filler, tokens)
+def filtered_tokens(tokens: Iterable[Token]) -> Iterator[Token]:
+    yield from filterfalse(is_filler, tokens)
 
 
 def is_identifier(token: Token) -> bool:

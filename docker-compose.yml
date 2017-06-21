@@ -12,7 +12,12 @@ services:
       - run
       - -p
       - test_scripts
-      - -o
+      - -i
+      - init
+      - -d
+      - -r
+      - refresh
+      - -j
       - hierarchy
       - -l
       - fdp
