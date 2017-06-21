@@ -59,7 +59,6 @@ USAGE_KEYWORDS_RE = re.compile(
     r'|'
     r'FROM'
     r')$')
-ALIAS_KEYWORDS_RE = re.compile(r'^AS$')
 
 MATERIALIZED_VIEW_TYPE = 'MATERIALIZED VIEW'
 
@@ -394,11 +393,10 @@ def scripts_paths(path: str) -> Iterable[str]:
 def parse_scripts(paths: Iterable[str]
                   ) -> Iterable[Tuple[str, SQLScript]]:
     for path, raw_script_str in read_scripts(paths):
-        used_names = (set(script_used_names(raw_script_str))
-                      - set(script_aliases(raw_script_str)))
-        defined_identifiers = set(script_defined_identifiers(raw_script_str))
-        yield path, SQLScript(defined=defined_identifiers,
-                              used=used_names)
+        script = SQLScript(
+            defined=set(script_defined_identifiers(raw_script_str)),
+            used=set(script_used_names(raw_script_str)))
+        yield path, script
 
 
 def read_scripts(paths: Iterable[str]) -> Iterable[Tuple[str, str]]:
@@ -446,17 +444,6 @@ def token_defined_identifiers(token: Token) -> Iterable[SQLIdentifier]:
         yield from token_defined_identifiers(token)
 
 
-def token_aliases(token: Token) -> Iterable[str]:
-    try:
-        tokens = filtered_tokens(token.tokens)
-    except AttributeError:
-        return
-    for token in tokens:
-        if is_identifier(token) and is_alias(token):
-            yield token.normalized
-        yield from token_aliases(token)
-
-
 script_used_names = partial(
     filtered_script_names_or_identifiers,
     names_or_identifiers_filter=token_used_names)
@@ -464,10 +451,6 @@ script_used_names = partial(
 script_defined_identifiers = partial(
     filtered_script_names_or_identifiers,
     names_or_identifiers_filter=token_defined_identifiers)
-
-script_aliases = partial(
-    filtered_script_names_or_identifiers,
-    names_or_identifiers_filter=token_aliases)
 
 
 def is_used_identifier(token: Union[Identifier, IdentifierList]
@@ -505,18 +488,6 @@ def is_defined_identifier(identifier: Identifier) -> bool:
     return DEFINITION_KEYWORDS_RE.match(first_parent_keyword_str) is not None
 
 
-def is_alias(token: Union[Identifier, IdentifierList]
-             ) -> bool:
-    children = child_tokens(token)
-    try:
-        nearest_child = next(children)
-    except StopIteration:
-        return False
-    nearest_child_str = (nearest_child
-                         .normalized.upper())
-    return ALIAS_KEYWORDS_RE.match(nearest_child_str) is not None
-
-
 def older_tokens(token: Token) -> Iterable[Token]:
     def older(sibling: Token) -> bool:
         # we assume that siblings are ordered
@@ -524,12 +495,6 @@ def older_tokens(token: Token) -> Iterable[Token]:
 
     siblings = filtered_tokens(token.parent.tokens)
     yield from takewhile(older, siblings)
-
-
-def child_tokens(token: Token) -> Iterator[Token]:
-    children = filtered_tokens(token.tokens)
-    next(children)
-    yield from children
 
 
 def filtered_tokens(tokens: Iterable[Token]) -> Iterator[Token]:
