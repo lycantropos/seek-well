@@ -2,6 +2,8 @@ seek-well
 =========
 
 [![Travis CI](https://travis-ci.org/lycantropos/seek-well.svg?branch=master)](https://travis-ci.org/lycantropos/seek-well)
+[![Docker Hub](https://img.shields.io/docker/build/lycantropos/seek-well.svg)](https://hub.docker.com/r/lycantropos/seek-well/builds/)
+[![License](https://img.shields.io/github/license/lycantropos/seek-well.svg)](https://github.com/lycantropos/seek-well/blob/master/LICENSE)
 [![PyPI](https://badge.fury.io/py/seek-well.svg)](https://badge.fury.io/py/seek-well)
 
 In what follows `python3` is an alias for `python3.6` or any later
