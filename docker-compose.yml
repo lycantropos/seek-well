@@ -2,10 +2,16 @@ version: '3'
 
 services:
   seek-well:
-    build: .
-    image: lycantropos/seek-well:latest
+    build:
+      context: .
+      args:
+        - PYTHON3_VERSION=${PYTHON3_VERSION}
+    image: lycantropos/seek-well:0.1.0
     volumes:
-      - .:/seek-well/
+      - ./test_scripts/:/opt/seek-well/test_scripts/
+      - ./scripts/:/opt/seek-well/scripts/
+      - ./README.rst:/opt/seek-well/README.rst
+      - ./setup.py:/opt/seek-well/setup.py
     extra_hosts:
       - "dockerhost:$DOCKERHOST"  # for debugging
     command:

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.6
+#!/usr/bin/env python3
 import copy
 import json
 import logging
@@ -34,7 +34,7 @@ from sqlparse.sql import (Token,
 from sqlparse.tokens import (Keyword,
                              Punctuation)
 
-__version__ = '0.0.5'
+__version__ = '0.1.0'
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +157,7 @@ def generate_initializer(*,
 def initializer(scripts_by_paths: Dict[str, SQLScript]) -> Iterable[str]:
     def is_view(identifier: SQLIdentifier) -> bool:
         return identifier.type in {VIEW_TYPE, MATERIALIZED_VIEW_TYPE}
+
     for script in reversed(scripts_by_paths.values()):
         defined_views_identifiers = filter(is_view, script.defined)
         for identifier in defined_views_identifiers:
@@ -238,10 +239,8 @@ def export_json(*,
 def normalize(paths_scripts: Iterable[Tuple[str, SQLScript]]
               ) -> Iterable[Tuple[str, OrderedDict]]:
     for path, script in paths_scripts:
-        defined_identifiers = list(script.defined)
-        defined_identifiers.sort()
-        used_names = list(script.used)
-        used_names.sort()
+        defined_identifiers = sorted(script.defined)
+        used_names = sorted(script.used)
         script = OrderedDict(defined=defined_identifiers,
                              used=used_names)
         yield path, script
@@ -370,7 +369,6 @@ def name_path(name: str,
              if name in defined_names]
     try:
         path, = paths
-        return path
     except ValueError as err:
         if paths:
             paths_str = ', '.join(paths)
@@ -386,6 +384,8 @@ def name_path(name: str,
                     'in scripts definitions.')
         logger.warning(warn_msg)
         return None
+    else:
+        return path
 
 
 def scripts_paths(path: str) -> Iterable[str]:
