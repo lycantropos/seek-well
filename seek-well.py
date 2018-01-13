@@ -157,6 +157,7 @@ def generate_initializer(*,
 def initializer(scripts_by_paths: Dict[str, SQLScript]) -> Iterable[str]:
     def is_view(identifier: SQLIdentifier) -> bool:
         return identifier.type in {VIEW_TYPE, MATERIALIZED_VIEW_TYPE}
+
     for script in reversed(scripts_by_paths.values()):
         defined_views_identifiers = filter(is_view, script.defined)
         for identifier in defined_views_identifiers:
