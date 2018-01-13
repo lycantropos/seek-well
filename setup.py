@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(name='seek-well',
-      version='0.0.4',
+      version='0.0.5',
       scripts=['seek-well.py'],
       description='Script for generating list of files paths '
                   'in hierarchical order '
