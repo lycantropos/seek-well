@@ -5,9 +5,6 @@ seek-well
 .. image:: https://travis-ci.org/lycantropos/seek-well.svg?branch=master
   :target:  https://travis-ci.org/lycantropos/seek-well
 
-.. image:: https://codecov.io/gh/lycantropos/seek-well/branch/master/graph/badge.svg
-  :target: https://codecov.io/gh/lycantropos/seek-well
-
 .. image:: https://badge.fury.io/py/seek-well.svg
   :target: https://badge.fury.io/py/seek-well
 
