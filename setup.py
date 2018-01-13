@@ -5,7 +5,7 @@ from setuptools import setup
 project_base_url = 'https://github.com/lycantropos/seek-well/'
 setup(name='seek-well',
       scripts=[os.path.join('scripts', 'seek-well')],
-      version='0.2.0',
+      version='0.2.1',
       description='Hierarchical ordering "SQL" scripts for correct execution.',
       long_description=open('README.rst').read(),
       author='Azat Ibrakov',
