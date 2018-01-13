@@ -368,7 +368,6 @@ def name_path(name: str,
              if name in defined_names]
     try:
         path, = paths
-        return path
     except ValueError as err:
         if paths:
             paths_str = ', '.join(paths)
@@ -384,6 +383,8 @@ def name_path(name: str,
                     'in scripts definitions.')
         logger.warning(warn_msg)
         return None
+    else:
+        return path
 
 
 def scripts_paths(path: str) -> Iterable[str]:
