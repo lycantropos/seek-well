@@ -5,7 +5,7 @@ FROM python:${PYTHON3_VERSION}
 RUN apt-get update && \
     apt-get install -y graphviz
 
-WORKDIR /seek-well
+WORKDIR /opt/seek-well
 
 COPY seek-well.py .
 COPY README.rst .
