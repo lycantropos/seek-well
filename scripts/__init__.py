@@ -1,6 +1,3 @@
-"""
-Script for generating list of files paths in hierarchical order
-for correct "SQL"-files compilation.
-"""
+"""Hierarchical ordering "SQL" scripts for correct execution."""
 
 __version__ = '0.0.6'
