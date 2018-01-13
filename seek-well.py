@@ -155,16 +155,12 @@ def generate_initializer(*,
 
 
 def initializer(scripts_by_paths: Dict[str, SQLScript]) -> Iterable[str]:
-    def is_materialized_view(identifier: SQLIdentifier) -> bool:
-        return identifier.type == MATERIALIZED_VIEW_TYPE
     def is_view(identifier: SQLIdentifier) -> bool:
-        return identifier.type == VIEW_TYPE
+        return identifier.type in {VIEW_TYPE, MATERIALIZED_VIEW_TYPE}
     for script in reversed(scripts_by_paths.values()):
-        for identifier in script.defined:
-            if is_materialized_view(identifier):
-                yield (f'DROP {MATERIALIZED_VIEW_TYPE} IF EXISTS {identifier.name} \n')
-            if is_view(identifier):
-                yield (f'DROP {VIEW_TYPE} IF EXISTS {identifier.name} \n')                
+        defined_views_identifiers = filter(is_view, script.defined)
+        for identifier in defined_views_identifiers:
+            yield f'DROP {identifier.type} IF EXISTS {identifier.name} \n'                
     for path in scripts_by_paths:
         yield f'\i {quote(path)}\n'
 
