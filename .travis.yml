@@ -6,11 +6,6 @@ language: python
 python:
   - "3.6"
 
-env:
-  global:
-    - LANG=en.UTF-8
-    - LC_ALL=en.UTF-8
-
 install:
   - python3 -m pip install .
 
