@@ -2,13 +2,15 @@
 import copy
 import json
 import logging
+import operator
 import os
 import re
 from collections import (OrderedDict,
                          namedtuple)
 from functools import partial
 from itertools import (filterfalse,
-                       takewhile)
+                       takewhile,
+                       chain)
 from shlex import quote
 from typing import (Union,
                     Optional,
@@ -94,6 +96,11 @@ def main() -> None:
               type=str,
               help='JSON output file name '
                    '(".json" extension will be added automatically).')
+@click.option('--undefined-names-file-name', '-u',
+              default=None,
+              type=str,
+              help='JSON with undefined but used names file name '
+                   '(".json" extension will be added automatically).')
 @click.option('--graphviz-file-name', '-g',
               default=None,
               type=str,
@@ -109,6 +116,7 @@ def run(path: str,
         initializer_file_name: Optional[str],
         refresher_file_name: Optional[str],
         json_file_name: Optional[str],
+        undefined_names_file_name: Optional[str],
         graphviz_file_name: Optional[str],
         graphviz_layout_command: Optional[str],
         graphviz_rendering_format: Optional[str]) -> None:
@@ -143,6 +151,9 @@ def run(path: str,
                         layout_command=graphviz_layout_command,
                         scripts_by_paths=sorted_scripts_by_paths,
                         defined_names_by_paths=defined_names_by_paths)
+    if undefined_names_file_name is not None:
+        export_undefined_names(file_name=undefined_names_file_name,
+                               scripts_by_paths=sorted_scripts_by_paths)
 
 
 def generate_initializer(*,
@@ -244,6 +255,24 @@ def normalize(paths_scripts: Iterable[Tuple[str, SQLScript]]
         script = OrderedDict(defined=defined_identifiers,
                              used=used_names)
         yield path, script
+
+
+def export_undefined_names(*,
+                           file_name: str,
+                           scripts_by_paths: Dict[str, SQLScript]) -> None:
+    file_name += JSON_FILE_EXTENSION
+    defined_names_by_paths = {path: script_defined_names(script)
+                              for path, script in scripts_by_paths.items()}
+    is_name_defined = partial(name_path,
+                              defined_names_by_paths=defined_names_by_paths)
+    scripts_used_names = chain.from_iterable(map(operator.attrgetter('used'),
+                                                 scripts_by_paths.values()))
+    undefined_names = set(filterfalse(is_name_defined, scripts_used_names))
+    undefined_names = sorted(undefined_names)
+    with open(file_name, mode='w') as file:
+        json.dump(obj=undefined_names,
+                  fp=file,
+                  indent=True)
 
 
 def sort_scripts(paths_scripts: Iterable[Tuple[str, SQLScript]]

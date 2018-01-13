@@ -15,4 +15,4 @@ install:
   - python3 -m pip install .
 
 script:
-  - seek-well run -p test_scripts -i init -r refresh -j hierarchy -l fdp -g hierarchy
+  - seek-well run -p test_scripts -i init -r refresh -j hierarchy -u undefined -l fdp -g hierarchy

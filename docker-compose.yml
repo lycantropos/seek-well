@@ -24,6 +24,8 @@ services:
       - refresh
       - -j
       - hierarchy
+      - -u
+      - undefined
       - -l
       - fdp
       - -g
