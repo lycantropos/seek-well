@@ -7,10 +7,10 @@ RUN apt-get update && \
 
 WORKDIR /opt/seek-well
 
-COPY seek-well.py .
+COPY scripts/ scripts/
 COPY README.rst .
 COPY setup.py .
 
 RUN python3 -m pip install -e .
 
-ENTRYPOINT ["python3", "seek-well.py"]
+ENTRYPOINT ["seek-well.py"]

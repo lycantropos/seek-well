@@ -8,8 +8,8 @@ services:
         - PYTHON3_VERSION=${PYTHON3_VERSION}
     image: lycantropos/seek-well:0.0.5
     volumes:
-      - ./test_scripts:/opt/seek-well/test_scripts
-      - ./seek-well.py:/opt/seek-well/seek-well.py
+      - ./test_scripts/:/opt/seek-well/test_scripts/
+      - ./scripts/:/opt/seek-well/scripts/
       - ./README.rst:/opt/seek-well/README.rst
       - ./setup.py:/opt/seek-well/setup.py
     extra_hosts:
