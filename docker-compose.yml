@@ -6,7 +6,7 @@ services:
       context: .
       args:
         - PYTHON3_VERSION=${PYTHON3_VERSION}
-    image: lycantropos/seek-well:0.0.5
+    image: lycantropos/seek-well:0.0.6
     volumes:
       - ./test_scripts/:/opt/seek-well/test_scripts/
       - ./scripts/:/opt/seek-well/scripts/
