@@ -128,21 +128,21 @@ def run(path: str,
         defined_names_by_paths=defined_names_by_paths)
     sorted_scripts_by_paths = OrderedDict(sort_scripts(scripts_by_paths
                                                        .items()))
-    if initializer_file_name:
+    if initializer_file_name is not None:
         generate_initializer(file_name=initializer_file_name,
                              scripts_by_paths=sorted_scripts_by_paths)
-    if refresher_file_name:
+    if refresher_file_name is not None:
         generate_refresher(file_name=refresher_file_name,
                            scripts_by_paths=sorted_scripts_by_paths)
-    if graphviz_file_name:
+    if json_file_name is not None:
+        export_json(file_name=json_file_name,
+                    scripts_by_paths=sorted_scripts_by_paths)
+    if graphviz_file_name is not None:
         export_graphviz(file_name=graphviz_file_name,
                         rendering_format=graphviz_rendering_format,
                         layout_command=graphviz_layout_command,
                         scripts_by_paths=sorted_scripts_by_paths,
                         defined_names_by_paths=defined_names_by_paths)
-    if json_file_name:
-        export_json(file_name=json_file_name,
-                    scripts_by_paths=sorted_scripts_by_paths)
 
 
 def generate_initializer(*,
