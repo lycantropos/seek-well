@@ -248,12 +248,12 @@ def normalize(paths_scripts: Iterable[Tuple[str, SQLScript]]
 
 def sort_scripts(paths_scripts: Iterable[Tuple[str, SQLScript]]
                  ) -> List[Tuple[str, SQLScript]]:
-    res = list()
+    result = []
     for path, script in paths_scripts:
         index_by_defined = min(
             (index
              for index, (_, other_script) in enumerate(
-                res,
+                result,
                 # insertion should be before script
                 # in which one of current script's defined identifiers is used
                 start=0)
@@ -263,7 +263,7 @@ def sort_scripts(paths_scripts: Iterable[Tuple[str, SQLScript]]
         index_by_used = max(
             (index
              for index, (_, other_script) in enumerate(
-                res,
+                result,
                 # insertion should be after script
                 # in which one of current script's used identifiers is defined
                 start=1)
@@ -271,8 +271,8 @@ def sort_scripts(paths_scripts: Iterable[Tuple[str, SQLScript]]
                     for used_name in script.used)),
             default=0)
         index = max(index_by_defined, index_by_used)
-        res.insert(index, (path, script))
-    return res
+        result.insert(index, (path, script))
+    return result
 
 
 def check_scripts_circular_dependencies(
