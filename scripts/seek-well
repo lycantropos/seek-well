@@ -106,12 +106,12 @@ def main() -> None:
               default=None,
               type=click.Choice(FORMATS))
 def run(path: str,
-        initializer_file_name: str,
-        refresher_file_name: str,
-        json_file_name: str,
-        graphviz_file_name: str,
-        graphviz_layout_command: str,
-        graphviz_rendering_format: str) -> None:
+        initializer_file_name: Optional[str],
+        refresher_file_name: Optional[str],
+        json_file_name: Optional[str],
+        graphviz_file_name: Optional[str],
+        graphviz_layout_command: Optional[str],
+        graphviz_rendering_format: Optional[str]) -> None:
     """
     Orders scripts paths by inclusion.
     """
