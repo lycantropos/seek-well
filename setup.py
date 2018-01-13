@@ -2,14 +2,12 @@ import os
 
 from setuptools import setup
 
-import scripts
-
 project_base_url = 'https://github.com/lycantropos/seek-well/'
 setup(name='seek-well',
       scripts=[os.path.join('scripts', 'seek-well')],
-      version=scripts.__version__,
-      description=scripts.__doc__,
-      long_description=open('README.rst').read(),
+      version='0.2.1',
+      description='Hierarchical ordering "SQL" scripts for correct execution.',
+      long_description=open('README.md').read(),
       author='Azat Ibrakov',
       author_email='azatibrakov@gmail.com',
       url=project_base_url,
