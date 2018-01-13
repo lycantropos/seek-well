@@ -238,10 +238,8 @@ def export_json(*,
 def normalize(paths_scripts: Iterable[Tuple[str, SQLScript]]
               ) -> Iterable[Tuple[str, OrderedDict]]:
     for path, script in paths_scripts:
-        defined_identifiers = list(script.defined)
-        defined_identifiers.sort()
-        used_names = list(script.used)
-        used_names.sort()
+        defined_identifiers = sorted(script.defined)
+        used_names = sorted(script.used)
         script = OrderedDict(defined=defined_identifiers,
                              used=used_names)
         yield path, script
