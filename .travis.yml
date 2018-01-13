@@ -6,12 +6,13 @@ language: python
 python:
   - "3.6"
 
+env:
+  global:
+    - LANG=en.UTF-8
+    - LC_ALL=en.UTF-8
 
 install:
-  - python3 -m pip install codecov>=2.0.9
+  - python3 -m pip install .
 
 script:
-  - python3 setup.py test
-
-after_success:
-  - codecov
+  - seek-well run -p test_scripts -i init -r refresh -j hierarchy -l fdp -g hierarchy
