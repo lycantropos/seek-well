@@ -61,6 +61,7 @@ USAGE_KEYWORDS_RE = re.compile(
     r')$')
 
 MATERIALIZED_VIEW_TYPE = 'MATERIALIZED VIEW'
+VIEW_TYPE = 'VIEW'
 
 SQLScript = namedtuple('SQLScript', ['used', 'defined'])
 SQLIdentifier = namedtuple('SQLIdentifier', ['type', 'name'])
@@ -154,6 +155,12 @@ def generate_initializer(*,
 
 
 def initializer(scripts_by_paths: Dict[str, SQLScript]) -> Iterable[str]:
+    def is_view(identifier: SQLIdentifier) -> bool:
+        return identifier.type in {VIEW_TYPE, MATERIALIZED_VIEW_TYPE}
+    for script in reversed(scripts_by_paths.values()):
+        defined_views_identifiers = filter(is_view, script.defined)
+        for identifier in defined_views_identifiers:
+            yield f'DROP {identifier.type} IF EXISTS {identifier.name}\n'                
     for path in scripts_by_paths:
         yield f'\i {quote(path)}\n'
 
