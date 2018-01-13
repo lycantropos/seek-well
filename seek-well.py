@@ -160,7 +160,7 @@ def initializer(scripts_by_paths: Dict[str, SQLScript]) -> Iterable[str]:
     for script in reversed(scripts_by_paths.values()):
         defined_views_identifiers = filter(is_view, script.defined)
         for identifier in defined_views_identifiers:
-            yield f'DROP {identifier.type} IF EXISTS {identifier.name}\n'                
+            yield f'DROP {identifier.type} IF EXISTS {identifier.name};\n'
     for path in scripts_by_paths:
         yield f'\i {quote(path)}\n'
 
