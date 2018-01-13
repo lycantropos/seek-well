@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 import copy
 import json
-import logging
+import operator
 import os
 import re
 from collections import (OrderedDict,
                          namedtuple)
 from functools import partial
 from itertools import (filterfalse,
-                       takewhile)
+                       takewhile,
+                       chain)
 from shlex import quote
 from typing import (Union,
                     Optional,
@@ -34,9 +35,7 @@ from sqlparse.sql import (Token,
 from sqlparse.tokens import (Keyword,
                              Punctuation)
 
-__version__ = '0.1.0'
-
-logger = logging.getLogger(__name__)
+__version__ = '0.2.0'
 
 # adding PostgreSQL specific keywords
 SQL_REGEX.insert(0, (re.compile(r'MATERIALIZED\s+VIEW', FLAGS).match,
@@ -69,7 +68,7 @@ SQLIdentifier = namedtuple('SQLIdentifier', ['type', 'name'])
 
 @click.group()
 def main() -> None:
-    logging.basicConfig(level=logging.DEBUG)
+    pass
 
 
 @main.command()
@@ -94,6 +93,11 @@ def main() -> None:
               type=str,
               help='JSON output file name '
                    '(".json" extension will be added automatically).')
+@click.option('--undefined-names-file-name', '-u',
+              default=None,
+              type=str,
+              help='JSON with undefined but used names file name '
+                   '(".json" extension will be added automatically).')
 @click.option('--graphviz-file-name', '-g',
               default=None,
               type=str,
@@ -106,12 +110,13 @@ def main() -> None:
               default=None,
               type=click.Choice(FORMATS))
 def run(path: str,
-        initializer_file_name: str,
-        refresher_file_name: str,
-        json_file_name: str,
-        graphviz_file_name: str,
-        graphviz_layout_command: str,
-        graphviz_rendering_format: str) -> None:
+        initializer_file_name: Optional[str],
+        refresher_file_name: Optional[str],
+        json_file_name: Optional[str],
+        undefined_names_file_name: Optional[str],
+        graphviz_file_name: Optional[str],
+        graphviz_layout_command: Optional[str],
+        graphviz_rendering_format: Optional[str]) -> None:
     """
     Orders scripts paths by inclusion.
     """
@@ -128,21 +133,24 @@ def run(path: str,
         defined_names_by_paths=defined_names_by_paths)
     sorted_scripts_by_paths = OrderedDict(sort_scripts(scripts_by_paths
                                                        .items()))
-    if initializer_file_name:
+    if initializer_file_name is not None:
         generate_initializer(file_name=initializer_file_name,
                              scripts_by_paths=sorted_scripts_by_paths)
-    if refresher_file_name:
+    if refresher_file_name is not None:
         generate_refresher(file_name=refresher_file_name,
                            scripts_by_paths=sorted_scripts_by_paths)
-    if graphviz_file_name:
+    if json_file_name is not None:
+        export_json(file_name=json_file_name,
+                    scripts_by_paths=sorted_scripts_by_paths)
+    if graphviz_file_name is not None:
         export_graphviz(file_name=graphviz_file_name,
                         rendering_format=graphviz_rendering_format,
                         layout_command=graphviz_layout_command,
                         scripts_by_paths=sorted_scripts_by_paths,
                         defined_names_by_paths=defined_names_by_paths)
-    if json_file_name:
-        export_json(file_name=json_file_name,
-                    scripts_by_paths=sorted_scripts_by_paths)
+    if undefined_names_file_name is not None:
+        export_undefined_names(file_name=undefined_names_file_name,
+                               scripts_by_paths=sorted_scripts_by_paths)
 
 
 def generate_initializer(*,
@@ -228,9 +236,9 @@ def export_json(*,
                 file_name: str,
                 scripts_by_paths: Dict[str, SQLScript]) -> None:
     file_name += JSON_FILE_EXTENSION
+    normalized_scripts_by_paths = OrderedDict(normalize(scripts_by_paths
+                                                        .items()))
     with open(file_name, mode='w') as file:
-        normalized_scripts_by_paths = OrderedDict(normalize(scripts_by_paths
-                                                            .items()))
         json.dump(obj=normalized_scripts_by_paths,
                   fp=file,
                   indent=True)
@@ -246,14 +254,32 @@ def normalize(paths_scripts: Iterable[Tuple[str, SQLScript]]
         yield path, script
 
 
+def export_undefined_names(*,
+                           file_name: str,
+                           scripts_by_paths: Dict[str, SQLScript]) -> None:
+    file_name += JSON_FILE_EXTENSION
+    defined_names_by_paths = {path: script_defined_names(script)
+                              for path, script in scripts_by_paths.items()}
+    is_name_defined = partial(name_path,
+                              defined_names_by_paths=defined_names_by_paths)
+    scripts_used_names = chain.from_iterable(map(operator.attrgetter('used'),
+                                                 scripts_by_paths.values()))
+    undefined_names = set(filterfalse(is_name_defined, scripts_used_names))
+    undefined_names = sorted(undefined_names)
+    with open(file_name, mode='w') as file:
+        json.dump(obj=undefined_names,
+                  fp=file,
+                  indent=True)
+
+
 def sort_scripts(paths_scripts: Iterable[Tuple[str, SQLScript]]
                  ) -> List[Tuple[str, SQLScript]]:
-    res = list()
+    result = []
     for path, script in paths_scripts:
         index_by_defined = min(
             (index
              for index, (_, other_script) in enumerate(
-                res,
+                result,
                 # insertion should be before script
                 # in which one of current script's defined identifiers is used
                 start=0)
@@ -263,7 +289,7 @@ def sort_scripts(paths_scripts: Iterable[Tuple[str, SQLScript]]
         index_by_used = max(
             (index
              for index, (_, other_script) in enumerate(
-                res,
+                result,
                 # insertion should be after script
                 # in which one of current script's used identifiers is defined
                 start=1)
@@ -271,8 +297,8 @@ def sort_scripts(paths_scripts: Iterable[Tuple[str, SQLScript]]
                     for used_name in script.used)),
             default=0)
         index = max(index_by_defined, index_by_used)
-        res.insert(index, (path, script))
-    return res
+        result.insert(index, (path, script))
+    return result
 
 
 def check_scripts_circular_dependencies(
@@ -378,11 +404,6 @@ def name_path(name: str,
                        'in scripts definitions within '
                        f'files located at {paths_str}.')
             raise ValueError(err_msg) from err
-        warn_msg = ('Requested identifier is not found: '
-                    'no appearance '
-                    f'of name "{name}" '
-                    'in scripts definitions.')
-        logger.warning(warn_msg)
         return None
     else:
         return path
@@ -401,8 +422,8 @@ def parse_scripts(paths: Iterable[str]
                   ) -> Iterable[Tuple[str, SQLScript]]:
     for path, raw_script_str in read_scripts(paths):
         script = SQLScript(
-            defined=set(script_defined_identifiers(raw_script_str)),
-            used=set(script_used_names(raw_script_str)))
+            defined=set(to_defined_identifiers(raw_script_str)),
+            used=set(to_used_names(raw_script_str)))
         yield path, script
 
 
@@ -413,14 +434,14 @@ def read_scripts(paths: Iterable[str]) -> Iterable[Tuple[str, str]]:
         yield path, raw_script_str
 
 
-def filtered_script_names_or_identifiers(
+def to_filtered_script_names_or_identifiers(
         raw_script: str,
         *,
-        names_or_identifiers_filter: Callable[[Token], Iterable[str]]
+        names_or_identifiers_extractor: Callable[[Token], Iterable[str]]
 ) -> Iterable[Token]:
     statements = sqlparse.parsestream(raw_script)
     for statement in statements:
-        yield from names_or_identifiers_filter(statement)
+        yield from names_or_identifiers_extractor(statement)
 
 
 def token_used_names(token: Token) -> Iterable[str]:
@@ -451,13 +472,13 @@ def token_defined_identifiers(token: Token) -> Iterable[SQLIdentifier]:
         yield from token_defined_identifiers(token)
 
 
-script_used_names = partial(
-    filtered_script_names_or_identifiers,
-    names_or_identifiers_filter=token_used_names)
+to_used_names = partial(
+    to_filtered_script_names_or_identifiers,
+    names_or_identifiers_extractor=token_used_names)
 
-script_defined_identifiers = partial(
-    filtered_script_names_or_identifiers,
-    names_or_identifiers_filter=token_defined_identifiers)
+to_defined_identifiers = partial(
+    to_filtered_script_names_or_identifiers,
+    names_or_identifiers_extractor=token_defined_identifiers)
 
 
 def is_used_identifier(token: Union[Identifier, IdentifierList]

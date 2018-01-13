@@ -6,7 +6,7 @@ services:
       context: .
       args:
         - PYTHON3_VERSION=${PYTHON3_VERSION}
-    image: lycantropos/seek-well:0.1.0
+    image: lycantropos/seek-well:0.2.0
     volumes:
       - ./test_scripts/:/opt/seek-well/test_scripts/
       - ./scripts/:/opt/seek-well/scripts/
@@ -24,6 +24,8 @@ services:
       - refresh
       - -j
       - hierarchy
+      - -u
+      - undefined
       - -l
       - fdp
       - -g
