@@ -228,9 +228,9 @@ def export_json(*,
                 file_name: str,
                 scripts_by_paths: Dict[str, SQLScript]) -> None:
     file_name += JSON_FILE_EXTENSION
+    normalized_scripts_by_paths = OrderedDict(normalize(scripts_by_paths
+                                                        .items()))
     with open(file_name, mode='w') as file:
-        normalized_scripts_by_paths = OrderedDict(normalize(scripts_by_paths
-                                                            .items()))
         json.dump(obj=normalized_scripts_by_paths,
                   fp=file,
                   indent=True)
