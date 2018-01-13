@@ -8,7 +8,7 @@ RUN apt-get update && \
 WORKDIR /opt/seek-well
 
 COPY scripts/ scripts/
-COPY README.rst .
+COPY README.md .
 COPY setup.py .
 
 RUN python3 -m pip install -e .

@@ -10,7 +10,7 @@ services:
     volumes:
       - ./test_scripts/:/opt/seek-well/test_scripts/
       - ./scripts/:/opt/seek-well/scripts/
-      - ./README.rst:/opt/seek-well/README.rst
+      - ./README.md:/opt/seek-well/README.md
       - ./setup.py:/opt/seek-well/setup.py
     extra_hosts:
       - "dockerhost:$DOCKERHOST"  # for debugging
