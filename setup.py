@@ -6,7 +6,7 @@ import scripts
 
 project_base_url = 'https://github.com/lycantropos/seek-well/'
 setup(name='seek-well',
-      scripts=[os.path.join('scripts', 'seek-well.py')],
+      scripts=[os.path.join('scripts', 'seek-well')],
       version=scripts.__version__,
       description=scripts.__doc__,
       long_description=open('README.rst').read(),

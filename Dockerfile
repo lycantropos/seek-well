@@ -13,4 +13,4 @@ COPY setup.py .
 
 RUN python3 -m pip install -e .
 
-ENTRYPOINT ["seek-well.py"]
+ENTRYPOINT ["seek-well"]
