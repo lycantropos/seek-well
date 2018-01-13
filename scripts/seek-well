@@ -401,8 +401,8 @@ def parse_scripts(paths: Iterable[str]
                   ) -> Iterable[Tuple[str, SQLScript]]:
     for path, raw_script_str in read_scripts(paths):
         script = SQLScript(
-            defined=set(script_defined_identifiers(raw_script_str)),
-            used=set(script_used_names(raw_script_str)))
+            defined=set(to_defined_identifiers(raw_script_str)),
+            used=set(to_used_names(raw_script_str)))
         yield path, script
 
 
@@ -413,14 +413,14 @@ def read_scripts(paths: Iterable[str]) -> Iterable[Tuple[str, str]]:
         yield path, raw_script_str
 
 
-def filtered_script_names_or_identifiers(
+def to_filtered_script_names_or_identifiers(
         raw_script: str,
         *,
-        names_or_identifiers_filter: Callable[[Token], Iterable[str]]
+        names_or_identifiers_extractor: Callable[[Token], Iterable[str]]
 ) -> Iterable[Token]:
     statements = sqlparse.parsestream(raw_script)
     for statement in statements:
-        yield from names_or_identifiers_filter(statement)
+        yield from names_or_identifiers_extractor(statement)
 
 
 def token_used_names(token: Token) -> Iterable[str]:
@@ -451,13 +451,13 @@ def token_defined_identifiers(token: Token) -> Iterable[SQLIdentifier]:
         yield from token_defined_identifiers(token)
 
 
-script_used_names = partial(
-    filtered_script_names_or_identifiers,
-    names_or_identifiers_filter=token_used_names)
+to_used_names = partial(
+    to_filtered_script_names_or_identifiers,
+    names_or_identifiers_extractor=token_used_names)
 
-script_defined_identifiers = partial(
-    filtered_script_names_or_identifiers,
-    names_or_identifiers_filter=token_defined_identifiers)
+to_defined_identifiers = partial(
+    to_filtered_script_names_or_identifiers,
+    names_or_identifiers_extractor=token_defined_identifiers)
 
 
 def is_used_identifier(token: Union[Identifier, IdentifierList]
